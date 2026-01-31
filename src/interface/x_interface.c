@@ -60,10 +60,25 @@ static Widget colorbar_form = NULL;
 static Widget colorbar_widget = NULL;
 
 /* Variable selector */
-static Widget varsel_form = NULL;
-static Widget varsel_box = NULL;
+static Widget varsel_form = NULL;      /* Container for variable selector */
+static Widget *varsel_boxes = NULL;    /* Array of box widgets for variable rows */
+static int n_varsel_boxes = 0;
 static Widget *var_toggles = NULL;
 static int n_var_toggles = 0;
+#define VARS_PER_ROW 5
+#define VAR_BUTTON_WIDTH 65
+
+/* Dimension info panel */
+static Widget diminfo_form = NULL;
+static Widget diminfo_labels_row = NULL;  /* Header row: Dim: Name: Min: Current: Max: Units: */
+static Widget *diminfo_rows = NULL;       /* One row per dimension */
+static Widget *diminfo_dim_labels = NULL;
+static Widget *diminfo_name_labels = NULL;
+static Widget *diminfo_min_labels = NULL;
+static Widget *diminfo_cur_buttons = NULL;  /* Clickable buttons for navigation */
+static Widget *diminfo_max_labels = NULL;
+static Widget *diminfo_units_labels = NULL;
+static int n_diminfo_rows = 0;
 
 /* Image popup window */
 static Widget image_shell = NULL;
@@ -99,6 +114,9 @@ static ZoomCallback zoom_cb = NULL;
 
 typedef void (*SaveCallback)(void);
 static SaveCallback save_cb = NULL;
+
+typedef void (*DimNavCallback)(int dim_index, int direction);
+static DimNavCallback dim_nav_cb = NULL;
 
 /* State */
 static size_t current_n_times = 1;
@@ -182,6 +200,25 @@ static void save_callback_fn(Widget w, XtPointer client_data, XtPointer call_dat
     if (save_cb) save_cb();
 }
 
+/* Dimension current button click - advance forward */
+static void diminfo_cur_forward_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)call_data;
+    int dim_idx = (int)(intptr_t)client_data;
+    if (dim_nav_cb) dim_nav_cb(dim_idx, 1);
+}
+
+/* Dimension current button right-click - go backward */
+static void diminfo_cur_backward_action(Widget w, XEvent *event, String *params, Cardinal *num_params) {
+    (void)event; (void)params; (void)num_params;
+    /* Find which dimension this button belongs to */
+    for (int i = 0; i < n_diminfo_rows; i++) {
+        if (diminfo_cur_buttons && diminfo_cur_buttons[i] == w) {
+            if (dim_nav_cb) dim_nav_cb(i, -1);
+            return;
+        }
+    }
+}
+
 static void time_scroll_callback(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)client_data;
     float percent = *(float *)call_data;
@@ -239,6 +276,15 @@ static void timer_wrapper(XtPointer client_data, XtIntervalId *id) {
 
 /* ========== Initialization ========== */
 
+/* Action procedure for backward navigation */
+static void diminfo_cur_backward_action_proc(Widget w, XEvent *event, String *params, Cardinal *num_params) {
+    diminfo_cur_backward_action(w, event, params, num_params);
+}
+
+static XtActionsRec actions[] = {
+    {"diminfo_cur_backward", diminfo_cur_backward_action_proc},
+};
+
 int x_init(int *argc, char **argv) {
     Widget btn;
 
@@ -259,6 +305,9 @@ int x_init(int *argc, char **argv) {
     }
 
     display = XtDisplay(top_level);
+
+    /* Register custom actions */
+    XtAppAddActions(app_context, actions, XtNumber(actions));
 
     /* ===== Main Form (container for all control widgets) ===== */
     main_form = XtVaCreateManagedWidget(
@@ -439,12 +488,66 @@ int x_init(int *argc, char **argv) {
     varsel_form = XtVaCreateManagedWidget(
         "varselForm", formWidgetClass, main_form,
         XtNfromVert, colorbar_form,
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 25,
+        XtNresizable, True,
+        NULL
+    );
+    /* Variable toggle buttons are created dynamically in x_setup_var_selector() */
+
+    /* ===== Dimension Info Panel ===== */
+    diminfo_form = XtVaCreateManagedWidget(
+        "diminfoForm", formWidgetClass, main_form,
+        XtNfromVert, varsel_form,
         NULL
     );
 
-    varsel_box = XtVaCreateManagedWidget(
-        "varselBox", boxWidgetClass, varsel_form,
+    /* Create header row: Dim: Name: Min: Current: Max: Units: */
+    diminfo_labels_row = XtVaCreateManagedWidget(
+        "diminfoLabelsRow", boxWidgetClass, diminfo_form,
         XtNorientation, XtorientHorizontal,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Dim:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 40,
+        XtNborderWidth, 0,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Name:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 60,
+        XtNborderWidth, 0,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Min:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 80,
+        XtNborderWidth, 0,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Current:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 80,
+        XtNborderWidth, 0,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Max:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 80,
+        XtNborderWidth, 0,
+        NULL
+    );
+
+    XtVaCreateManagedWidget(
+        "Units:", labelWidgetClass, diminfo_labels_row,
+        XtNwidth, 80,
+        XtNborderWidth, 0,
         NULL
     );
 
@@ -496,6 +599,7 @@ void x_set_mouse_callback(void (*cb)(int, int)) { mouse_motion_cb = cb; }
 void x_set_range_callback(void (*cb)(int)) { range_adjust_cb = cb; }
 void x_set_zoom_callback(void (*cb)(int)) { zoom_cb = cb; }
 void x_set_save_callback(void (*cb)(void)) { save_cb = cb; }
+void x_set_dim_nav_callback(DimNavCallback cb) { dim_nav_cb = cb; }
 
 /* ========== Variable Selector ========== */
 
@@ -509,21 +613,73 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
         var_toggles = NULL;
     }
 
-    if (n_vars == 0) {
+    /* Free old boxes */
+    if (varsel_boxes) {
+        for (int i = 0; i < n_varsel_boxes; i++) {
+            XtDestroyWidget(varsel_boxes[i]);
+        }
+        free(varsel_boxes);
+        varsel_boxes = NULL;
+    }
+
+    if (n_vars == 0 || !varsel_form) {
         n_var_toggles = 0;
+        n_varsel_boxes = 0;
         return;
     }
 
-    /* Create toggle buttons in radio group */
+    /* Calculate number of rows needed */
+    int num_boxes = (n_vars + VARS_PER_ROW - 1) / VARS_PER_ROW;
+    varsel_boxes = malloc(num_boxes * sizeof(Widget));
+    n_varsel_boxes = num_boxes;
+
+    /* Create toggle buttons in radio group, arranged in rows */
     var_toggles = malloc(n_vars * sizeof(Widget));
     n_var_toggles = n_vars;
 
+    int current_box = -1;
     for (int i = 0; i < n_vars; i++) {
+        /* Create new box row if needed */
+        if (i % VARS_PER_ROW == 0) {
+            current_box++;
+            char box_name[32];
+            snprintf(box_name, sizeof(box_name), "varselBox%d", current_box);
+
+            if (current_box == 0) {
+                varsel_boxes[current_box] = XtVaCreateManagedWidget(
+                    box_name, boxWidgetClass, varsel_form,
+                    XtNorientation, XtorientHorizontal,
+                    XtNborderWidth, 0,
+                    NULL
+                );
+            } else {
+                varsel_boxes[current_box] = XtVaCreateManagedWidget(
+                    box_name, boxWidgetClass, varsel_form,
+                    XtNorientation, XtorientHorizontal,
+                    XtNfromVert, varsel_boxes[current_box - 1],
+                    XtNborderWidth, 0,
+                    NULL
+                );
+            }
+
+            /* Add "Var:" label to first row only */
+            if (current_box == 0) {
+                XtVaCreateManagedWidget(
+                    "Var:", labelWidgetClass, varsel_boxes[current_box],
+                    XtNwidth, 35,
+                    XtNborderWidth, 0,
+                    NULL
+                );
+            }
+        }
+
+        /* Create toggle button */
         var_toggles[i] = XtVaCreateManagedWidget(
             var_names[i],
             toggleWidgetClass,
-            varsel_box,
+            varsel_boxes[current_box],
             XtNlabel, var_names[i],
+            XtNwidth, VAR_BUTTON_WIDTH,
             XtNstate, (i == 0) ? True : False,
             XtNradioGroup, (i > 0) ? var_toggles[0] : NULL,
             NULL
@@ -532,7 +688,150 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
                       (XtPointer)(intptr_t)i);
     }
 
+    /* Handle single variable case - needs to be its own radio group */
+    if (n_vars == 1) {
+        XtVaSetValues(var_toggles[0], XtNradioGroup, var_toggles[0], NULL);
+    }
+
     current_var_index = 0;
+}
+
+/* ========== Dimension Info Panel ========== */
+
+static void x_clear_dim_info(void) {
+    /* Destroy existing dimension rows (in reverse order for safety) */
+    if (diminfo_rows) {
+        for (int i = n_diminfo_rows - 1; i >= 0; i--) {
+            if (diminfo_rows[i]) {
+                XtDestroyWidget(diminfo_rows[i]);
+            }
+        }
+        free(diminfo_rows);
+        diminfo_rows = NULL;
+    }
+    free(diminfo_dim_labels);
+    diminfo_dim_labels = NULL;
+    free(diminfo_name_labels);
+    diminfo_name_labels = NULL;
+    free(diminfo_min_labels);
+    diminfo_min_labels = NULL;
+    free(diminfo_cur_buttons);
+    diminfo_cur_buttons = NULL;
+    free(diminfo_max_labels);
+    diminfo_max_labels = NULL;
+    free(diminfo_units_labels);
+    diminfo_units_labels = NULL;
+    n_diminfo_rows = 0;
+}
+
+void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
+    if (!diminfo_form || !diminfo_labels_row) return;
+
+    x_clear_dim_info();
+
+    if (n_dims <= 0 || !dims) return;
+
+    /* Allocate widget arrays */
+    diminfo_rows = calloc(n_dims, sizeof(Widget));
+    diminfo_dim_labels = calloc(n_dims, sizeof(Widget));
+    diminfo_name_labels = calloc(n_dims, sizeof(Widget));
+    diminfo_min_labels = calloc(n_dims, sizeof(Widget));
+    diminfo_cur_buttons = calloc(n_dims, sizeof(Widget));
+    diminfo_max_labels = calloc(n_dims, sizeof(Widget));
+    diminfo_units_labels = calloc(n_dims, sizeof(Widget));
+    n_diminfo_rows = n_dims;
+
+    if (!diminfo_rows || !diminfo_dim_labels || !diminfo_name_labels ||
+        !diminfo_min_labels || !diminfo_cur_buttons || !diminfo_max_labels ||
+        !diminfo_units_labels) {
+        x_clear_dim_info();
+        return;
+    }
+
+    /* Create a row for each dimension */
+    for (int i = 0; i < n_dims; i++) {
+        const USDimInfo *di = &dims[i];
+        char buf[64];
+
+        /* Create row box widget */
+        diminfo_rows[i] = XtVaCreateManagedWidget(
+            "diminfoRow", boxWidgetClass, diminfo_form,
+            XtNorientation, XtorientHorizontal,
+            XtNfromVert, (i == 0) ? diminfo_labels_row : diminfo_rows[i - 1],
+            NULL
+        );
+
+        /* Dimension number label */
+        snprintf(buf, sizeof(buf), "%d", i);
+        diminfo_dim_labels[i] = XtVaCreateManagedWidget(
+            buf, labelWidgetClass, diminfo_rows[i],
+            XtNwidth, 40,
+            XtNborderWidth, 0,
+            NULL
+        );
+
+        /* Dimension name label */
+        diminfo_name_labels[i] = XtVaCreateManagedWidget(
+            di->name, labelWidgetClass, diminfo_rows[i],
+            XtNwidth, 60,
+            XtNborderWidth, 0,
+            NULL
+        );
+
+        /* Min value label */
+        snprintf(buf, sizeof(buf), "%.4g", di->min_val);
+        diminfo_min_labels[i] = XtVaCreateManagedWidget(
+            buf, labelWidgetClass, diminfo_rows[i],
+            XtNwidth, 80,
+            XtNborderWidth, 0,
+            NULL
+        );
+
+        /* Current value button (clickable) */
+        if (di->values && di->size > 0) {
+            snprintf(buf, sizeof(buf), "%.4g", di->values[di->current]);
+        } else {
+            snprintf(buf, sizeof(buf), "%zu", di->current);
+        }
+        diminfo_cur_buttons[i] = XtVaCreateManagedWidget(
+            buf, commandWidgetClass, diminfo_rows[i],
+            XtNwidth, 80,
+            XtNsensitive, di->is_scannable ? True : False,
+            NULL
+        );
+        XtAddCallback(diminfo_cur_buttons[i], XtNcallback,
+                      diminfo_cur_forward_callback, (XtPointer)(intptr_t)i);
+        /* Add right-click for backward navigation */
+        XtAugmentTranslations(diminfo_cur_buttons[i],
+            XtParseTranslationTable("<Btn3Down>,<Btn3Up>: diminfo_cur_backward()"));
+
+        /* Max value label */
+        snprintf(buf, sizeof(buf), "%.4g", di->max_val);
+        diminfo_max_labels[i] = XtVaCreateManagedWidget(
+            buf, labelWidgetClass, diminfo_rows[i],
+            XtNwidth, 80,
+            XtNborderWidth, 0,
+            NULL
+        );
+
+        /* Units label */
+        diminfo_units_labels[i] = XtVaCreateManagedWidget(
+            di->units[0] ? di->units : "-", labelWidgetClass, diminfo_rows[i],
+            XtNwidth, 80,
+            XtNborderWidth, 0,
+            NULL
+        );
+    }
+}
+
+void x_update_dim_current(int dim_index, size_t current_idx, double current_val) {
+    (void)current_idx;  /* May be used in future for index display */
+    if (dim_index < 0 || dim_index >= n_diminfo_rows) return;
+    if (!diminfo_cur_buttons || !diminfo_cur_buttons[dim_index]) return;
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.4g", current_val);
+    XtVaSetValues(diminfo_cur_buttons[dim_index], XtNlabel, buf, NULL);
 }
 
 /* ========== Update Functions ========== */
@@ -756,4 +1055,6 @@ void x_cleanup(void) {
 
     colorbar_cleanup();
     free(var_toggles);
+    free(varsel_boxes);
+    x_clear_dim_info();
 }

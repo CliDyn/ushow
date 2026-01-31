@@ -26,6 +26,8 @@ static USVar *variables = NULL;
 static USVar *current_var = NULL;
 static int n_variables = 0;
 static int animating = 0;
+static USDimInfo *current_dim_info = NULL;
+static int n_current_dims = 0;
 
 /* Options */
 static USOptions options = {
@@ -38,6 +40,7 @@ static USOptions options = {
 /* Forward declarations */
 static void update_display(void);
 static void animation_tick(void);
+static void update_dim_info_current(void);
 
 /* Callbacks */
 static void on_var_select(int var_index) {
@@ -57,6 +60,14 @@ static void on_var_select(int var_index) {
     x_update_time(view->time_index, view->n_times);
     x_update_depth(view->depth_index, view->n_depths);
 
+    /* Set up dimension info panel */
+    if (current_dim_info) {
+        netcdf_free_dim_info(current_dim_info, n_current_dims);
+    }
+    current_dim_info = netcdf_get_dim_info(var, &n_current_dims);
+    x_setup_dim_info(current_dim_info, n_current_dims);
+    update_dim_info_current();
+
     update_display();
 }
 
@@ -64,6 +75,7 @@ static void on_time_change(size_t time_idx) {
     if (!view || !current_var) return;
     view_set_time(view, time_idx);
     x_update_time(view->time_index, view->n_times);
+    update_dim_info_current();
     update_display();
 }
 
@@ -71,6 +83,7 @@ static void on_depth_change(size_t depth_idx) {
     if (!view || !current_var) return;
     view_set_depth(view, depth_idx);
     x_update_depth(view->depth_index, view->n_depths);
+    update_dim_info_current();
     update_display();
 }
 
@@ -204,6 +217,70 @@ static void on_save(void) {
     } else {
         fprintf(stderr, "Failed to save image\n");
     }
+}
+
+static void update_dim_info_current(void) {
+    if (!view || !current_dim_info) return;
+
+    /* Update current values for each dimension in the panel */
+    int dim_idx = 0;
+    for (int i = 0; i < n_current_dims; i++) {
+        USDimInfo *di = &current_dim_info[i];
+        size_t current_idx;
+        double current_val;
+
+        /* Determine which dimension this is (time or depth) */
+        if (current_var->time_dim_id >= 0 &&
+            strcmp(di->name, current_var->dim_names[current_var->time_dim_id]) == 0) {
+            current_idx = view->time_index;
+        } else if (current_var->depth_dim_id >= 0 &&
+                   strcmp(di->name, current_var->dim_names[current_var->depth_dim_id]) == 0) {
+            current_idx = view->depth_index;
+        } else {
+            continue;
+        }
+
+        di->current = current_idx;
+        if (di->values && current_idx < di->size) {
+            current_val = di->values[current_idx];
+        } else {
+            current_val = (double)current_idx;
+        }
+
+        x_update_dim_current(dim_idx, current_idx, current_val);
+        dim_idx++;
+    }
+}
+
+static void on_dim_nav(int dim_index, int direction) {
+    if (!view || !current_var || !current_dim_info) return;
+    if (dim_index < 0 || dim_index >= n_current_dims) return;
+
+    USDimInfo *di = &current_dim_info[dim_index];
+
+    /* Determine which dimension this is and navigate it */
+    if (current_var->time_dim_id >= 0 &&
+        strcmp(di->name, current_var->dim_names[current_var->time_dim_id]) == 0) {
+        /* Time dimension */
+        int new_idx = (int)view->time_index + direction;
+        if (new_idx < 0) new_idx = 0;
+        if (new_idx >= (int)view->n_times) new_idx = (int)view->n_times - 1;
+        view_set_time(view, (size_t)new_idx);
+        x_update_time(view->time_index, view->n_times);
+    } else if (current_var->depth_dim_id >= 0 &&
+               strcmp(di->name, current_var->dim_names[current_var->depth_dim_id]) == 0) {
+        /* Depth dimension */
+        int new_idx = (int)view->depth_index + direction;
+        if (new_idx < 0) new_idx = 0;
+        if (new_idx >= (int)view->n_depths) new_idx = (int)view->n_depths - 1;
+        view_set_depth(view, (size_t)new_idx);
+        x_update_depth(view->depth_index, view->n_depths);
+    } else {
+        return;  /* Unknown dimension */
+    }
+
+    update_dim_info_current();
+    update_display();
 }
 
 static void animation_tick(void) {
@@ -370,6 +447,7 @@ int main(int argc, char *argv[]) {
     x_set_range_callback(on_range_adjust);
     x_set_zoom_callback(on_zoom);
     x_set_save_callback(on_save);
+    x_set_dim_nav_callback(on_dim_nav);
 
     /* Set up variable selector */
     const char **var_names = malloc(n_variables * sizeof(char *));
@@ -402,6 +480,9 @@ int main(int argc, char *argv[]) {
 
     /* Cleanup */
     x_cleanup();
+    if (current_dim_info) {
+        netcdf_free_dim_info(current_dim_info, n_current_dims);
+    }
     view_free(view);
     regrid_free(regrid);
     mesh_free(mesh);

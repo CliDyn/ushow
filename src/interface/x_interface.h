@@ -40,6 +40,29 @@ void x_set_save_callback(void (*cb)(void));         /* save button pressed */
 void x_setup_var_selector(const char **var_names, int n_vars);
 
 /*
+ * Callback for dimension navigation.
+ * dim_index: which dimension (0=first scannable dim, typically time or depth)
+ * direction: -1=back, +1=forward
+ */
+typedef void (*DimNavCallback)(int dim_index, int direction);
+void x_set_dim_nav_callback(DimNavCallback cb);
+
+/*
+ * Set up dimension info panel.
+ * dims: array of dimension info structures
+ * n_dims: number of dimensions
+ */
+void x_setup_dim_info(const USDimInfo *dims, int n_dims);
+
+/*
+ * Update dimension info current values.
+ * dim_index: which dimension to update
+ * current_idx: current index value
+ * current_val: current coordinate value (if available)
+ */
+void x_update_dim_current(int dim_index, size_t current_idx, double current_val);
+
+/*
  * Update display image from RGB pixel data.
  * pixels: RGB data [height * width * 3]
  */

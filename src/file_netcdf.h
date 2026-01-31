@@ -37,4 +37,16 @@ int netcdf_estimate_range(USVar *var, float *min_val, float *max_val);
  */
 void netcdf_close(USFile *file);
 
+/*
+ * Read dimension coordinate values and metadata.
+ * Returns allocated USDimInfo array (must be freed with netcdf_free_dim_info).
+ * n_dims_out: number of dimensions returned
+ */
+USDimInfo *netcdf_get_dim_info(USVar *var, int *n_dims_out);
+
+/*
+ * Free dimension info array.
+ */
+void netcdf_free_dim_info(USDimInfo *dims, int n_dims);
+
 #endif /* FILE_NETCDF_H */

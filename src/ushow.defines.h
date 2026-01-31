@@ -190,6 +190,18 @@ typedef struct {
     int         frame_delay_ms;     /* Animation speed */
 } USOptions;
 
+/* Dimension info for display */
+typedef struct {
+    char        name[MAX_NAME_LEN];     /* Dimension name (e.g., "time", "depth") */
+    char        units[MAX_NAME_LEN];    /* Units string */
+    size_t      size;                    /* Dimension size */
+    size_t      current;                 /* Current index */
+    double      min_val;                 /* Min coordinate value */
+    double      max_val;                 /* Max coordinate value */
+    double     *values;                  /* All coordinate values (NULL if no coord var) */
+    int         is_scannable;            /* Can we navigate this dimension? */
+} USDimInfo;
+
 /* Colormap entry */
 typedef struct {
     unsigned char r, g, b;

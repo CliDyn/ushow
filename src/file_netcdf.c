@@ -242,9 +242,8 @@ int netcdf_estimate_range(USVar *var, float *min_val, float *max_val) {
     float global_min = 1e30f;
     float global_max = -1e30f;
 
-    /* Sample a few time/depth slices */
+    /* Sample a few time slices at surface depth */
     size_t n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
-    size_t n_depths = (var->depth_dim_id >= 0) ? var->dim_sizes[var->depth_dim_id] : 1;
 
     /* Sample first, middle, last time at surface */
     size_t sample_times[] = {0, n_times / 2, n_times - 1};
@@ -300,4 +299,82 @@ void netcdf_close(USFile *file) {
     }
 
     free(file);
+}
+
+USDimInfo *netcdf_get_dim_info(USVar *var, int *n_dims_out) {
+    if (!var || !var->file || !n_dims_out) return NULL;
+
+    int ncid = var->file->ncid;
+
+    /* Count non-spatial dimensions that are scannable (time, depth) */
+    int n_scannable = 0;
+    for (int d = 0; d < var->n_dims; d++) {
+        if (d == var->time_dim_id || d == var->depth_dim_id) {
+            n_scannable++;
+        }
+    }
+
+    if (n_scannable == 0) {
+        *n_dims_out = 0;
+        return NULL;
+    }
+
+    USDimInfo *dims = calloc(n_scannable, sizeof(USDimInfo));
+    if (!dims) {
+        *n_dims_out = 0;
+        return NULL;
+    }
+
+    int idx = 0;
+    for (int d = 0; d < var->n_dims; d++) {
+        /* Only include time and depth dimensions */
+        if (d != var->time_dim_id && d != var->depth_dim_id) continue;
+
+        USDimInfo *di = &dims[idx];
+        strncpy(di->name, var->dim_names[d], MAX_NAME_LEN - 1);
+        di->size = var->dim_sizes[d];
+        di->current = (d == var->time_dim_id) ? 0 : 0;  /* Will be updated by caller */
+        di->is_scannable = (di->size > 1);
+
+        /* Try to find a coordinate variable with the same name as the dimension */
+        int coord_varid;
+        if (nc_inq_varid(ncid, var->dim_names[d], &coord_varid) == NC_NOERR) {
+            /* Get units attribute */
+            nc_get_att_text(ncid, coord_varid, "units", di->units);
+
+            /* Read all coordinate values */
+            di->values = malloc(di->size * sizeof(double));
+            if (di->values) {
+                int status = nc_get_var_double(ncid, coord_varid, di->values);
+                if (status == NC_NOERR && di->size > 0) {
+                    di->min_val = di->values[0];
+                    di->max_val = di->values[di->size - 1];
+                } else {
+                    /* Fall back to indices */
+                    free(di->values);
+                    di->values = NULL;
+                    di->min_val = 0;
+                    di->max_val = (double)(di->size - 1);
+                }
+            }
+        } else {
+            /* No coordinate variable, use indices */
+            di->values = NULL;
+            di->min_val = 0;
+            di->max_val = (double)(di->size - 1);
+        }
+
+        idx++;
+    }
+
+    *n_dims_out = n_scannable;
+    return dims;
+}
+
+void netcdf_free_dim_info(USDimInfo *dims, int n_dims) {
+    if (!dims) return;
+    for (int i = 0; i < n_dims; i++) {
+        free(dims[i].values);
+    }
+    free(dims);
 }
