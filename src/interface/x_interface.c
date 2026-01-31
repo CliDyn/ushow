@@ -27,7 +27,9 @@
 /* Layout constants (like ncview's app_data) */
 #define LABEL_WIDTH      350
 #define BUTTON_WIDTH     50
-#define CBAR_HEIGHT      20
+#define CBAR_HEIGHT      16
+#define CBAR_LABEL_HEIGHT 14
+#define CBAR_PAD         2
 #define DIM_COL_WIDTH    50
 #define NAME_COL_WIDTH   80
 #define VALUE_COL_WIDTH  80
@@ -99,6 +101,8 @@ static GC image_gc = None;
 static XImage *cbar_ximage = NULL;
 static unsigned char *cbar_image_data = NULL;
 static GC cbar_gc = None;
+static float cbar_min_val = 0.0f;
+static float cbar_max_val = 1.0f;
 
 /* Callbacks */
 static VarSelectCallback var_select_cb = NULL;
@@ -258,13 +262,52 @@ static void image_motion_callback(Widget w, XtPointer client_data, XEvent *event
     }
 }
 
+static void draw_colorbar(Widget w) {
+    if (!cbar_ximage || cbar_gc == None) return;
+
+    size_t cbar_width, cbar_height;
+    colorbar_get_pixels(&cbar_width, &cbar_height);
+    Dimension widget_w = 0, widget_h = 0;
+    XtVaGetValues(w, XtNwidth, &widget_w, XtNheight, &widget_h, NULL);
+
+    /* Black background */
+    XSetForeground(display, cbar_gc, BlackPixel(display, DefaultScreen(display)));
+    XFillRectangle(display, XtWindow(w), cbar_gc, 0, 0, widget_w, widget_h);
+
+    /* Draw colorbar at top */
+    XPutImage(display, XtWindow(w), cbar_gc, cbar_ximage, 0, 0, 0, 0,
+              cbar_width, cbar_height);
+
+    /* Draw labels below the colorbar in white */
+    XSetForeground(display, cbar_gc, WhitePixel(display, DefaultScreen(display)));
+    XFontStruct *font = XQueryFont(display, XGContextFromGC(cbar_gc));
+    int ascent = font ? font->ascent : 10;
+
+    const int n_labels = 5;
+    for (int i = 0; i < n_labels; i++) {
+        float t = (float)i / (float)(n_labels - 1);
+        float val = cbar_min_val + t * (cbar_max_val - cbar_min_val);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.4g", val);
+
+        int text_w = font ? XTextWidth(font, buf, (int)strlen(buf)) : 0;
+        int x = (int)(t * (float)(cbar_width - 1)) - text_w / 2;
+        if (x < 2) x = 2;
+        if (x > (int)cbar_width - text_w - 2) x = (int)cbar_width - text_w - 2;
+
+        int y = (int)cbar_height + CBAR_PAD + ascent;
+        XDrawString(display, XtWindow(w), cbar_gc, x, y, buf, (int)strlen(buf));
+    }
+
+    if (font) {
+        XFreeFontInfo(NULL, font, 1);
+    }
+}
+
 static void colorbar_expose_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
     (void)client_data; (void)cont;
-    if (event->type == Expose && cbar_ximage && cbar_gc != None) {
-        size_t cbar_width, cbar_height;
-        colorbar_get_pixels(&cbar_width, &cbar_height);
-        XPutImage(display, XtWindow(w), cbar_gc, cbar_ximage, 0, 0, 0, 0,
-                  cbar_width, cbar_height);
+    if (event->type == Expose && XtIsRealized(w)) {
+        draw_colorbar(w);
     }
 }
 
@@ -484,7 +527,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     colorbar_widget = XtVaCreateManagedWidget(
         "colorbar", simpleWidgetClass, colorbar_form,
         XtNwidth, LABEL_WIDTH,
-        XtNheight, CBAR_HEIGHT,
+        XtNheight, CBAR_HEIGHT + CBAR_LABEL_HEIGHT + CBAR_PAD,
         XtNborderWidth, 1,
         NULL
     );
@@ -605,7 +648,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
 
     /* Create colorbar GC and initialize */
     cbar_gc = XCreateGC(display, XtWindow(colorbar_widget), 0, NULL);
-    colorbar_init(LABEL_WIDTH);
+    colorbar_init(LABEL_WIDTH, CBAR_HEIGHT);
     XtAddEventHandler(colorbar_widget, ExposureMask, False, colorbar_expose_callback, NULL);
 
     /* Pop up the image window */
@@ -1034,17 +1077,29 @@ void x_update_value_label(double lon, double lat, float value) {
 }
 
 void x_update_colorbar(float min_val, float max_val, size_t width) {
-    (void)min_val; (void)max_val;
+    (void)width;
     if (!display || !colorbar_widget) return;
 
-    colorbar_init(width);
+    cbar_min_val = min_val;
+    cbar_max_val = max_val;
+
+    Dimension w = 0, h = 0;
+    if (XtIsRealized(colorbar_widget)) {
+        XtVaGetValues(colorbar_widget, XtNwidth, &w, XtNheight, &h, NULL);
+    }
+    if (w == 0) {
+        w = LABEL_WIDTH;
+    }
+
+    colorbar_init((size_t)w, CBAR_HEIGHT);
     colorbar_render();
 
     size_t cbar_width, cbar_height;
     unsigned char *cbar_pixels = colorbar_get_pixels(&cbar_width, &cbar_height);
     if (!cbar_pixels) return;
 
-    XtVaSetValues(colorbar_widget, XtNwidth, cbar_width, XtNheight, cbar_height, NULL);
+    XtVaSetValues(colorbar_widget, XtNwidth, cbar_width,
+                  XtNheight, (Dimension)(CBAR_HEIGHT + CBAR_LABEL_HEIGHT + CBAR_PAD), NULL);
 
     if (cbar_ximage) {
         cbar_ximage->data = NULL;
@@ -1088,9 +1143,8 @@ void x_update_colorbar(float min_val, float max_val, size_t width) {
     cbar_ximage = XCreateImage(display, visual, depth, ZPixmap, 0,
                                (char *)cbar_image_data, cbar_width, cbar_height, 32, 0);
 
-    if (cbar_ximage && XtIsRealized(colorbar_widget)) {
-        XPutImage(display, XtWindow(colorbar_widget), cbar_gc, cbar_ximage,
-                  0, 0, 0, 0, cbar_width, cbar_height);
+    if (XtIsRealized(colorbar_widget)) {
+        draw_colorbar(colorbar_widget);
         XFlush(display);
     }
 }

@@ -7,13 +7,13 @@
 
 #include <stddef.h>
 
-/* Colorbar dimensions */
-#define COLORBAR_WIDTH 20
+/* Default colorbar height */
+#define COLORBAR_HEIGHT 20
 
 /*
- * Initialize colorbar with specified height.
+ * Initialize colorbar with specified width and height.
  */
-void colorbar_init(size_t height);
+void colorbar_init(size_t width, size_t height);
 
 /*
  * Render colorbar using current colormap.

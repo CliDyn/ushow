@@ -10,16 +10,17 @@
 
 static unsigned char *cbar_pixels = NULL;
 static size_t cbar_width = 0;
-static size_t cbar_height = COLORBAR_WIDTH;  /* Height is fixed at 20 pixels */
+static size_t cbar_height = COLORBAR_HEIGHT;  /* Default height */
 
-void colorbar_init(size_t width) {
+void colorbar_init(size_t width, size_t height) {
     /* Free existing buffer if reallocating */
-    if (cbar_pixels && cbar_width != width) {
+    if (cbar_pixels && (cbar_width != width || cbar_height != height)) {
         free(cbar_pixels);
         cbar_pixels = NULL;
     }
 
     cbar_width = width;
+    cbar_height = height;
     if (!cbar_pixels && cbar_width > 0) {
         cbar_pixels = malloc(cbar_width * cbar_height * 3);
     }
