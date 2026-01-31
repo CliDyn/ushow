@@ -25,9 +25,13 @@
 #include <string.h>
 
 /* Layout constants (like ncview's app_data) */
-#define LABEL_WIDTH    350
-#define BUTTON_WIDTH   50
-#define CBAR_HEIGHT    20
+#define LABEL_WIDTH      350
+#define BUTTON_WIDTH     50
+#define CBAR_HEIGHT      20
+#define DIM_COL_WIDTH    50
+#define NAME_COL_WIDTH   80
+#define VALUE_COL_WIDTH  80
+#define UNITS_COL_WIDTH  80
 
 /* Global X11 resources */
 static Display *display = NULL;
@@ -517,42 +521,60 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
 
     XtVaCreateManagedWidget(
         "Dim:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 40,
+        XtNwidth, DIM_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
 
     XtVaCreateManagedWidget(
         "Name:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 60,
+        XtNwidth, NAME_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
 
     XtVaCreateManagedWidget(
         "Min:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 80,
+        XtNwidth, VALUE_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
 
     XtVaCreateManagedWidget(
         "Current:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 80,
+        XtNwidth, VALUE_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
 
     XtVaCreateManagedWidget(
         "Max:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 80,
+        XtNwidth, VALUE_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
 
     XtVaCreateManagedWidget(
         "Units:", labelWidgetClass, diminfo_labels_row,
-        XtNwidth, 80,
+        XtNwidth, UNITS_COL_WIDTH,
+        XtNresize, False,
+        XtNinternalWidth, 0,
+        XtNinternalHeight, 0,
         XtNborderWidth, 0,
         NULL
     );
@@ -766,7 +788,10 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_dim_labels[i] = XtVaCreateManagedWidget(
             "diminfoDim", labelWidgetClass, diminfo_rows[i],
             XtNlabel, buf,
-            XtNwidth, 40,
+            XtNwidth, DIM_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
             XtNborderWidth, 0,
             NULL
         );
@@ -775,7 +800,10 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_name_labels[i] = XtVaCreateManagedWidget(
             "diminfoName", labelWidgetClass, diminfo_rows[i],
             XtNlabel, di->name,
-            XtNwidth, 60,
+            XtNwidth, NAME_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
             XtNborderWidth, 0,
             NULL
         );
@@ -785,7 +813,10 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_min_labels[i] = XtVaCreateManagedWidget(
             "diminfoMin", labelWidgetClass, diminfo_rows[i],
             XtNlabel, buf,
-            XtNwidth, 80,
+            XtNwidth, VALUE_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
             XtNborderWidth, 0,
             NULL
         );
@@ -799,7 +830,12 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_cur_buttons[i] = XtVaCreateManagedWidget(
             "diminfoCur", commandWidgetClass, diminfo_rows[i],
             XtNlabel, buf,
-            XtNwidth, 80,
+            XtNwidth, VALUE_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
+            XtNborderWidth, 0,
+            XtNhighlightThickness, 0,
             XtNsensitive, di->is_scannable ? True : False,
             NULL
         );
@@ -814,7 +850,10 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_max_labels[i] = XtVaCreateManagedWidget(
             "diminfoMax", labelWidgetClass, diminfo_rows[i],
             XtNlabel, buf,
-            XtNwidth, 80,
+            XtNwidth, VALUE_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
             XtNborderWidth, 0,
             NULL
         );
@@ -823,7 +862,10 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_units_labels[i] = XtVaCreateManagedWidget(
             "diminfoUnits", labelWidgetClass, diminfo_rows[i],
             XtNlabel, di->units[0] ? di->units : "-",
-            XtNwidth, 80,
+            XtNwidth, UNITS_COL_WIDTH,
+            XtNresize, False,
+            XtNinternalWidth, 0,
+            XtNinternalHeight, 0,
             XtNborderWidth, 0,
             NULL
         );
