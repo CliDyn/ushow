@@ -1,6 +1,6 @@
 # ushow - Unstructured Data Viewer
 
-A fast, ncview-like visualization tool for structured and unstructured geoscientific data.
+A fast, ncview‑inspired visualization tool for structured and unstructured geoscientific data.
 
 ## Features
 
@@ -17,8 +17,18 @@ Requirements:
 - X11 development libraries (libX11, libXt, libXaw)
 - C compiler (gcc or clang)
 
+macOS (Homebrew):
 ```bash
-cd ushow
+brew install netcdf libx11 libxt libxaw
+```
+
+Linux (Debian/Ubuntu):
+```bash
+sudo apt-get install libnetcdf-dev libx11-dev libxt-dev libxaw7-dev
+```
+
+Build:
+```bash
 make
 ```
 
@@ -61,6 +71,8 @@ Higher resolution display:
   - `Fwd >`: Start forward animation
 - **Time/Depth sliders**: Navigate through dimensions
 - **Colormap button**: Click to cycle through colormaps
+- **Dimension panel**: Shows dimension names, ranges, current values
+- **Colorbar**: Min/max and intermediate labels update as you adjust range
 
 ## Data Flow
 
@@ -88,6 +100,16 @@ Automatically identifies dimension roles:
 - Depth: depth, z, lev, level, nz, nz1
 - Nodes: nod2, nod2d, node, nodes, ncells, npoints
 
+## Output
+
+- **Screenshot/Save**: Use the Save button to write a PPM image for the current variable/time/depth.
+- Output filenames are auto-generated as: `<var>_t<time>_d<depth>.ppm`
+
+## Troubleshooting
+
+- **X11 on macOS**: Install XQuartz and ensure it is running.
+- **SSH**: Use `ssh -X` for X11 forwarding.
+
 ## Performance
 
 - KDTree built once per mesh, cached for all frames
@@ -95,6 +117,10 @@ Automatically identifies dimension roles:
 - Only current 2D slice loaded per frame (~500KB vs full ~290MB for typical data)
 - Efficient nearest-neighbor interpolation (index lookup)
 
+## Acknowledgments
+
+ushow’s interface design is inspired by **ncview**.
+
 ## License
 
-BSD-style license (same as ncview)
+GPL-3.0
