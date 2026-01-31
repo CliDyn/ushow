@@ -11,7 +11,7 @@
  * Initialize X11 display.
  * Returns 0 on success, -1 on failure.
  */
-int x_init(int *argc, char **argv);
+int x_init(int *argc, char **argv, const char **var_names, int n_vars);
 
 /*
  * Set callbacks for user interactions.

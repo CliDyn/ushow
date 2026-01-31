@@ -285,7 +285,7 @@ static XtActionsRec actions[] = {
     {"diminfo_cur_backward", diminfo_cur_backward_action_proc},
 };
 
-int x_init(int *argc, char **argv) {
+int x_init(int *argc, char **argv, const char **var_names, int n_vars) {
     Widget btn;
 
     /* Initialize Xt */
@@ -486,19 +486,23 @@ int x_init(int *argc, char **argv) {
 
     /* ===== Variable Selector ===== */
     varsel_form = XtVaCreateManagedWidget(
-        "varselForm", formWidgetClass, main_form,
+        "varselForm", boxWidgetClass, main_form,
         XtNfromVert, colorbar_form,
+        XtNorientation, XtorientVertical,
         XtNwidth, LABEL_WIDTH,
-        XtNheight, 25,
         XtNresizable, True,
         NULL
     );
-    /* Variable toggle buttons are created dynamically in x_setup_var_selector() */
+    /* Variable toggle buttons are created before realization */
+    x_setup_var_selector(var_names, n_vars);
 
     /* ===== Dimension Info Panel ===== */
     diminfo_form = XtVaCreateManagedWidget(
-        "diminfoForm", formWidgetClass, main_form,
+        "diminfoForm", boxWidgetClass, main_form,
         XtNfromVert, varsel_form,
+        XtNorientation, XtorientVertical,
+        XtNwidth, LABEL_WIDTH,
+        XtNresizable, True,
         NULL
     );
 
@@ -506,6 +510,7 @@ int x_init(int *argc, char **argv) {
     diminfo_labels_row = XtVaCreateManagedWidget(
         "diminfoLabelsRow", boxWidgetClass, diminfo_form,
         XtNorientation, XtorientHorizontal,
+        XtNwidth, LABEL_WIDTH,
         NULL
     );
 
@@ -645,22 +650,13 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
             char box_name[32];
             snprintf(box_name, sizeof(box_name), "varselBox%d", current_box);
 
-            if (current_box == 0) {
-                varsel_boxes[current_box] = XtVaCreateManagedWidget(
-                    box_name, boxWidgetClass, varsel_form,
-                    XtNorientation, XtorientHorizontal,
-                    XtNborderWidth, 0,
-                    NULL
-                );
-            } else {
-                varsel_boxes[current_box] = XtVaCreateManagedWidget(
-                    box_name, boxWidgetClass, varsel_form,
-                    XtNorientation, XtorientHorizontal,
-                    XtNfromVert, varsel_boxes[current_box - 1],
-                    XtNborderWidth, 0,
-                    NULL
-                );
-            }
+            varsel_boxes[current_box] = XtVaCreateManagedWidget(
+                box_name, boxWidgetClass, varsel_form,
+                XtNorientation, XtorientHorizontal,
+                XtNwidth, LABEL_WIDTH,
+                XtNborderWidth, 0,
+                NULL
+            );
 
             /* Add "Var:" label to first row only */
             if (current_box == 0) {
@@ -757,7 +753,7 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         diminfo_rows[i] = XtVaCreateManagedWidget(
             "diminfoRow", boxWidgetClass, diminfo_form,
             XtNorientation, XtorientHorizontal,
-            XtNfromVert, (i == 0) ? diminfo_labels_row : diminfo_rows[i - 1],
+            XtNwidth, LABEL_WIDTH,
             NULL
         );
 

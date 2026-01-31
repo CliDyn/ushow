@@ -427,15 +427,25 @@ int main(int argc, char *argv[]) {
         v = v->next;
     }
 
+    /* Build variable name list for UI initialization */
+    const char **var_names = malloc(n_variables * sizeof(char *));
+    v = variables;
+    for (int i = 0; i < n_variables; i++) {
+        var_names[i] = v->name;
+        v = v->next;
+    }
+
     /* Initialize X11 */
     printf("Initializing display...\n");
-    if (x_init(&argc, argv) != 0) {
+    if (x_init(&argc, argv, var_names, n_variables) != 0) {
         fprintf(stderr, "Failed to initialize X11 display\n");
+        free(var_names);
         regrid_free(regrid);
         mesh_free(mesh);
         netcdf_close(file);
         return 1;
     }
+    free(var_names);
 
     /* Set up callbacks */
     x_set_var_callback(on_var_select);
@@ -448,16 +458,6 @@ int main(int argc, char *argv[]) {
     x_set_zoom_callback(on_zoom);
     x_set_save_callback(on_save);
     x_set_dim_nav_callback(on_dim_nav);
-
-    /* Set up variable selector */
-    const char **var_names = malloc(n_variables * sizeof(char *));
-    v = variables;
-    for (int i = 0; i < n_variables; i++) {
-        var_names[i] = v->name;
-        v = v->next;
-    }
-    x_setup_var_selector(var_names, n_variables);
-    free(var_names);
 
     /* Create view */
     view = view_create();
