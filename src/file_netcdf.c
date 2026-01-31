@@ -6,6 +6,7 @@
 #include <netcdf.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <math.h>
 
@@ -15,6 +16,80 @@ static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "
 static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d", NULL};
 static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
 static const char *LON_NAMES[] = {"lon", "longitude", "x", "nlon", "rlon", "i", NULL};
+
+static int name_contains_ci(const char *name, const char *needle) {
+    if (!name || !needle) return 0;
+    return strcasestr(name, needle) != NULL;
+}
+
+static int name_starts_with_ci(const char *name, const char *prefix) {
+    if (!name || !prefix) return 0;
+    size_t len = strlen(prefix);
+    return strncasecmp(name, prefix, len) == 0;
+}
+
+static int name_ends_with_ci(const char *name, const char *suffix) {
+    if (!name || !suffix) return 0;
+    size_t name_len = strlen(name);
+    size_t suffix_len = strlen(suffix);
+    if (suffix_len > name_len) return 0;
+    return strncasecmp(name + (name_len - suffix_len), suffix, suffix_len) == 0;
+}
+
+static int get_att_text(int ncid, int varid, const char *att, char *buf, size_t bufsize) {
+    size_t len = 0;
+    if (!buf || bufsize == 0) return 0;
+    buf[0] = '\0';
+    if (nc_inq_attlen(ncid, varid, att, &len) != NC_NOERR) return 0;
+    if (len >= bufsize) len = bufsize - 1;
+    if (nc_get_att_text(ncid, varid, att, buf) != NC_NOERR) return 0;
+    buf[len] = '\0';
+    return 1;
+}
+
+static int coord_var_is_time(int ncid, const char *dim_name) {
+    int varid;
+    char buf[256];
+    if (nc_inq_varid(ncid, dim_name, &varid) != NC_NOERR) return 0;
+
+    if (get_att_text(ncid, varid, "axis", buf, sizeof(buf)) && (buf[0] == 'T' || buf[0] == 't')) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "standard_name", buf, sizeof(buf)) && strcasecmp(buf, "time") == 0) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "units", buf, sizeof(buf)) && name_contains_ci(buf, "since")) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "long_name", buf, sizeof(buf)) && name_contains_ci(buf, "time")) {
+        return 1;
+    }
+    return 0;
+}
+
+static int coord_var_is_depth(int ncid, const char *dim_name) {
+    int varid;
+    char buf[256];
+    if (nc_inq_varid(ncid, dim_name, &varid) != NC_NOERR) return 0;
+
+    if (get_att_text(ncid, varid, "axis", buf, sizeof(buf)) && (buf[0] == 'Z' || buf[0] == 'z')) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "standard_name", buf, sizeof(buf))) {
+        if (strcasecmp(buf, "depth") == 0 || strcasecmp(buf, "altitude") == 0) return 1;
+    }
+    if (get_att_text(ncid, varid, "positive", buf, sizeof(buf)) &&
+        (strcasecmp(buf, "down") == 0 || strcasecmp(buf, "up") == 0)) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "long_name", buf, sizeof(buf)) && name_contains_ci(buf, "depth")) {
+        return 1;
+    }
+    if (get_att_text(ncid, varid, "units", buf, sizeof(buf))) {
+        if (name_contains_ci(buf, "meter") || name_contains_ci(buf, "metre")) return 1;
+    }
+    return 0;
+}
 
 /* Check if a name matches any in a list */
 static int matches_name_list(const char *name, const char **list) {
@@ -91,9 +166,15 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
         for (int d = 0; d < var_ndims; d++) {
             nc_inq_dim(ncid, dimids[d], dim_names[d], &dim_sizes[d]);
 
-            if (matches_name_list(dim_names[d], TIME_NAMES)) {
+            if (matches_name_list(dim_names[d], TIME_NAMES) ||
+                name_contains_ci(dim_names[d], "time")) {
                 time_dim = d;
-            } else if (matches_name_list(dim_names[d], DEPTH_NAMES)) {
+            } else if (matches_name_list(dim_names[d], DEPTH_NAMES) ||
+                       name_contains_ci(dim_names[d], "depth") ||
+                       name_contains_ci(dim_names[d], "lev") ||
+                       strcasecmp(dim_names[d], "z") == 0 ||
+                       name_starts_with_ci(dim_names[d], "z_") ||
+                       name_ends_with_ci(dim_names[d], "_z")) {
                 depth_dim = d;
             } else if (matches_name_list(dim_names[d], NODE_NAMES)) {
                 node_dim = d;
@@ -101,6 +182,19 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
                 lat_dim = d;
             } else if (matches_name_list(dim_names[d], LON_NAMES)) {
                 lon_dim = d;
+            }
+        }
+
+        /* Fallback: infer time/depth from coordinate variable attributes */
+        if (time_dim < 0 || depth_dim < 0) {
+            for (int d = 0; d < var_ndims; d++) {
+                if (d == lat_dim || d == lon_dim || d == node_dim) continue;
+                if (time_dim < 0 && coord_var_is_time(ncid, dim_names[d])) {
+                    time_dim = d;
+                }
+                if (depth_dim < 0 && coord_var_is_depth(ncid, dim_names[d])) {
+                    depth_dim = d;
+                }
             }
         }
 

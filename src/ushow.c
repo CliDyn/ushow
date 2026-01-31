@@ -65,7 +65,40 @@ static void on_var_select(int var_index) {
         netcdf_free_dim_info(current_dim_info, n_current_dims);
     }
     current_dim_info = netcdf_get_dim_info(var, &n_current_dims);
-    x_setup_dim_info(current_dim_info, n_current_dims);
+    if (!current_dim_info || n_current_dims == 0) {
+        int count = 0;
+        if (var->time_dim_id >= 0) count++;
+        if (var->depth_dim_id >= 0) count++;
+        if (count > 0) {
+            USDimInfo *fallback = calloc(count, sizeof(USDimInfo));
+            if (fallback) {
+                int idx = 0;
+                if (var->time_dim_id >= 0) {
+                    USDimInfo *di = &fallback[idx++];
+                    strncpy(di->name, var->dim_names[var->time_dim_id], MAX_NAME_LEN - 1);
+                    di->size = var->dim_sizes[var->time_dim_id];
+                    di->current = 0;
+                    di->min_val = 0;
+                    di->max_val = (di->size > 0) ? (double)(di->size - 1) : 0.0;
+                    di->values = NULL;
+                    di->is_scannable = (di->size > 1);
+                }
+                if (var->depth_dim_id >= 0) {
+                    USDimInfo *di = &fallback[idx++];
+                    strncpy(di->name, var->dim_names[var->depth_dim_id], MAX_NAME_LEN - 1);
+                    di->size = var->dim_sizes[var->depth_dim_id];
+                    di->current = 0;
+                    di->min_val = 0;
+                    di->max_val = (di->size > 0) ? (double)(di->size - 1) : 0.0;
+                    di->values = NULL;
+                    di->is_scannable = (di->size > 1);
+                }
+                current_dim_info = fallback;
+                n_current_dims = count;
+            }
+        }
+    }
+    x_update_dim_info(current_dim_info, n_current_dims);
     update_dim_info_current();
 
     update_display();
@@ -435,17 +468,73 @@ int main(int argc, char *argv[]) {
         v = v->next;
     }
 
+    /* Build initial dimension info from variable with most scannable dims */
+    USVar *max_var = variables;
+    int max_scannable = -1;
+    for (v = variables; v != NULL; v = v->next) {
+        int count = 0;
+        if (v->time_dim_id >= 0) count++;
+        if (v->depth_dim_id >= 0) count++;
+        if (count > max_scannable) {
+            max_scannable = count;
+            max_var = v;
+        }
+    }
+    USDimInfo *init_dims = NULL;
+    int n_init_dims = 0;
+    if (max_var) {
+        init_dims = netcdf_get_dim_info(max_var, &n_init_dims);
+        if (!init_dims || n_init_dims == 0) {
+            int count = 0;
+            if (max_var->time_dim_id >= 0) count++;
+            if (max_var->depth_dim_id >= 0) count++;
+            if (count > 0) {
+                init_dims = calloc(count, sizeof(USDimInfo));
+                if (init_dims) {
+                    int idx = 0;
+                    if (max_var->time_dim_id >= 0) {
+                        USDimInfo *di = &init_dims[idx++];
+                        strncpy(di->name, max_var->dim_names[max_var->time_dim_id], MAX_NAME_LEN - 1);
+                        di->size = max_var->dim_sizes[max_var->time_dim_id];
+                        di->current = 0;
+                        di->min_val = 0;
+                        di->max_val = (di->size > 0) ? (double)(di->size - 1) : 0.0;
+                        di->values = NULL;
+                        di->is_scannable = (di->size > 1);
+                    }
+                    if (max_var->depth_dim_id >= 0) {
+                        USDimInfo *di = &init_dims[idx++];
+                        strncpy(di->name, max_var->dim_names[max_var->depth_dim_id], MAX_NAME_LEN - 1);
+                        di->size = max_var->dim_sizes[max_var->depth_dim_id];
+                        di->current = 0;
+                        di->min_val = 0;
+                        di->max_val = (di->size > 0) ? (double)(di->size - 1) : 0.0;
+                        di->values = NULL;
+                        di->is_scannable = (di->size > 1);
+                    }
+                    n_init_dims = count;
+                }
+            }
+        }
+    }
+
     /* Initialize X11 */
     printf("Initializing display...\n");
-    if (x_init(&argc, argv, var_names, n_variables) != 0) {
+    if (x_init(&argc, argv, var_names, n_variables, init_dims, n_init_dims) != 0) {
         fprintf(stderr, "Failed to initialize X11 display\n");
         free(var_names);
+        if (init_dims) {
+            netcdf_free_dim_info(init_dims, n_init_dims);
+        }
         regrid_free(regrid);
         mesh_free(mesh);
         netcdf_close(file);
         return 1;
     }
     free(var_names);
+    if (init_dims) {
+        netcdf_free_dim_info(init_dims, n_init_dims);
+    }
 
     /* Set up callbacks */
     x_set_var_callback(on_var_select);

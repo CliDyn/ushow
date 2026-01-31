@@ -285,7 +285,8 @@ static XtActionsRec actions[] = {
     {"diminfo_cur_backward", diminfo_cur_backward_action_proc},
 };
 
-int x_init(int *argc, char **argv, const char **var_names, int n_vars) {
+int x_init(int *argc, char **argv, const char **var_names, int n_vars,
+           const USDimInfo *dims, int n_dims) {
     Widget btn;
 
     /* Initialize Xt */
@@ -556,6 +557,9 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars) {
         NULL
     );
 
+    /* Create initial dimension info rows before realization */
+    x_setup_dim_info(dims, n_dims);
+
     /* ===== Image Popup Window ===== */
     image_shell = XtVaCreatePopupShell(
         "imageWindow",
@@ -760,7 +764,8 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         /* Dimension number label */
         snprintf(buf, sizeof(buf), "%d", i);
         diminfo_dim_labels[i] = XtVaCreateManagedWidget(
-            buf, labelWidgetClass, diminfo_rows[i],
+            "diminfoDim", labelWidgetClass, diminfo_rows[i],
+            XtNlabel, buf,
             XtNwidth, 40,
             XtNborderWidth, 0,
             NULL
@@ -768,7 +773,8 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
 
         /* Dimension name label */
         diminfo_name_labels[i] = XtVaCreateManagedWidget(
-            di->name, labelWidgetClass, diminfo_rows[i],
+            "diminfoName", labelWidgetClass, diminfo_rows[i],
+            XtNlabel, di->name,
             XtNwidth, 60,
             XtNborderWidth, 0,
             NULL
@@ -777,7 +783,8 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         /* Min value label */
         snprintf(buf, sizeof(buf), "%.4g", di->min_val);
         diminfo_min_labels[i] = XtVaCreateManagedWidget(
-            buf, labelWidgetClass, diminfo_rows[i],
+            "diminfoMin", labelWidgetClass, diminfo_rows[i],
+            XtNlabel, buf,
             XtNwidth, 80,
             XtNborderWidth, 0,
             NULL
@@ -790,7 +797,8 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
             snprintf(buf, sizeof(buf), "%zu", di->current);
         }
         diminfo_cur_buttons[i] = XtVaCreateManagedWidget(
-            buf, commandWidgetClass, diminfo_rows[i],
+            "diminfoCur", commandWidgetClass, diminfo_rows[i],
+            XtNlabel, buf,
             XtNwidth, 80,
             XtNsensitive, di->is_scannable ? True : False,
             NULL
@@ -804,7 +812,8 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
         /* Max value label */
         snprintf(buf, sizeof(buf), "%.4g", di->max_val);
         diminfo_max_labels[i] = XtVaCreateManagedWidget(
-            buf, labelWidgetClass, diminfo_rows[i],
+            "diminfoMax", labelWidgetClass, diminfo_rows[i],
+            XtNlabel, buf,
             XtNwidth, 80,
             XtNborderWidth, 0,
             NULL
@@ -812,11 +821,45 @@ void x_setup_dim_info(const USDimInfo *dims, int n_dims) {
 
         /* Units label */
         diminfo_units_labels[i] = XtVaCreateManagedWidget(
-            di->units[0] ? di->units : "-", labelWidgetClass, diminfo_rows[i],
+            "diminfoUnits", labelWidgetClass, diminfo_rows[i],
+            XtNlabel, di->units[0] ? di->units : "-",
             XtNwidth, 80,
             XtNborderWidth, 0,
             NULL
         );
+    }
+}
+
+void x_update_dim_info(const USDimInfo *dims, int n_dims) {
+    if (!diminfo_rows || n_diminfo_rows <= 0) return;
+
+    for (int i = 0; i < n_diminfo_rows; i++) {
+        if (i < n_dims && dims) {
+            const USDimInfo *di = &dims[i];
+            char buf[64];
+
+            XtManageChild(diminfo_rows[i]);
+
+            snprintf(buf, sizeof(buf), "%d", i);
+            XtVaSetValues(diminfo_dim_labels[i], XtNlabel, buf, NULL);
+            XtVaSetValues(diminfo_name_labels[i], XtNlabel, di->name, NULL);
+            snprintf(buf, sizeof(buf), "%.4g", di->min_val);
+            XtVaSetValues(diminfo_min_labels[i], XtNlabel, buf, NULL);
+            if (di->values && di->size > 0) {
+                snprintf(buf, sizeof(buf), "%.4g", di->values[di->current]);
+            } else {
+                snprintf(buf, sizeof(buf), "%zu", di->current);
+            }
+            XtVaSetValues(diminfo_cur_buttons[i], XtNlabel, buf, NULL);
+            XtVaSetValues(diminfo_cur_buttons[i], XtNsensitive,
+                          di->is_scannable ? True : False, NULL);
+            snprintf(buf, sizeof(buf), "%.4g", di->max_val);
+            XtVaSetValues(diminfo_max_labels[i], XtNlabel, buf, NULL);
+            XtVaSetValues(diminfo_units_labels[i], XtNlabel,
+                          di->units[0] ? di->units : "-", NULL);
+        } else {
+            XtUnmanageChild(diminfo_rows[i]);
+        }
     }
 }
 

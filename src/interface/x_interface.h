@@ -11,7 +11,8 @@
  * Initialize X11 display.
  * Returns 0 on success, -1 on failure.
  */
-int x_init(int *argc, char **argv, const char **var_names, int n_vars);
+int x_init(int *argc, char **argv, const char **var_names, int n_vars,
+           const USDimInfo *dims, int n_dims);
 
 /*
  * Set callbacks for user interactions.
@@ -53,6 +54,7 @@ void x_set_dim_nav_callback(DimNavCallback cb);
  * n_dims: number of dimensions
  */
 void x_setup_dim_info(const USDimInfo *dims, int n_dims);
+void x_update_dim_info(const USDimInfo *dims, int n_dims);
 
 /*
  * Update dimension info current values.
