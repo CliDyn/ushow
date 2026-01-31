@@ -47,7 +47,6 @@ static Widget main_form = NULL;
 static Widget label_title = NULL;
 static Widget label_varname = NULL;
 static Widget label_dims = NULL;
-static Widget label_range = NULL;
 static Widget label_value = NULL;
 
 /* Button boxes */
@@ -394,22 +393,12 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         NULL
     );
 
-    /* Label 4: Range */
-    label_range = XtVaCreateManagedWidget(
-        "labelRange", labelWidgetClass, main_form,
-        XtNlabel, "Range: [-, -]",
-        XtNwidth, LABEL_WIDTH,
-        XtNfromVert, label_dims,
-        XtNborderWidth, 0,
-        NULL
-    );
-
-    /* Label 5: Value at cursor */
+    /* Label 4: Value at cursor */
     label_value = XtVaCreateManagedWidget(
         "labelValue", labelWidgetClass, main_form,
         XtNlabel, "Lon: -  Lat: -  Val: -",
         XtNwidth, LABEL_WIDTH,
-        XtNfromVert, label_range,
+        XtNfromVert, label_dims,
         XtNborderWidth, 0,
         NULL
     );
@@ -1032,10 +1021,6 @@ void x_update_image(const unsigned char *pixels, size_t width, size_t height) {
 
 void x_update_time(size_t time_idx, size_t n_times) {
     current_n_times = n_times;
-    /* Update combined dims label */
-    char buf[128];
-    snprintf(buf, sizeof(buf), "Time: %zu/%zu", time_idx + 1, n_times);
-    /* We'll update this in the combined label update below */
 
     if (n_times > 1) {
         float pos = (float)time_idx / (n_times - 1);
@@ -1058,10 +1043,15 @@ void x_update_var_name(const char *name) {
     XtVaSetValues(label_varname, XtNlabel, buf, NULL);
 }
 
+void x_update_dim_label(const char *text) {
+    if (!label_dims || !text) return;
+    XtVaSetValues(label_dims, XtNlabel, text, NULL);
+}
+
 void x_update_range_label(float min_val, float max_val) {
     char buf[128];
     snprintf(buf, sizeof(buf), "Range: [%.4g, %.4g]", min_val, max_val);
-    XtVaSetValues(label_range, XtNlabel, buf, NULL);
+    (void)min_val; (void)max_val; (void)buf;
 }
 
 void x_update_colormap_label(const char *name) {

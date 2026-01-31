@@ -41,6 +41,8 @@ static USOptions options = {
 static void update_display(void);
 static void animation_tick(void);
 static void update_dim_info_current(void);
+static void update_dim_label(void);
+static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
 
 /* Callbacks */
 static void on_var_select(int var_index) {
@@ -100,6 +102,7 @@ static void on_var_select(int var_index) {
     }
     x_update_dim_info(current_dim_info, n_current_dims);
     update_dim_info_current();
+    update_dim_label();
 
     update_display();
 }
@@ -109,6 +112,7 @@ static void on_time_change(size_t time_idx) {
     view_set_time(view, time_idx);
     x_update_time(view->time_index, view->n_times);
     update_dim_info_current();
+    update_dim_label();
     update_display();
 }
 
@@ -117,6 +121,7 @@ static void on_depth_change(size_t depth_idx) {
     view_set_depth(view, depth_idx);
     x_update_depth(view->depth_index, view->n_depths);
     update_dim_info_current();
+    update_dim_label();
     update_display();
 }
 
@@ -132,6 +137,7 @@ static void on_animation(int direction) {
         if (view) {
             view_step_time(view, 1);
             x_update_time(view->time_index, view->n_times);
+            update_dim_label();
             update_display();
         }
     } else if (direction == 2) {
@@ -147,6 +153,7 @@ static void on_animation(int direction) {
         if (view) {
             view_step_time(view, -1);
             x_update_time(view->time_index, view->n_times);
+            update_dim_label();
             update_display();
         }
     } else if (direction == -2) {
@@ -156,6 +163,7 @@ static void on_animation(int direction) {
         if (view) {
             view_set_time(view, 0);
             x_update_time(view->time_index, view->n_times);
+            update_dim_label();
             update_display();
         }
     }
@@ -285,6 +293,174 @@ static void update_dim_info_current(void) {
     }
 }
 
+static int parse_time_units(const char *units, double *unit_seconds,
+                            int *y, int *mo, int *d, int *h, int *mi, double *sec) {
+    if (!units || !unit_seconds || !y || !mo || !d || !h || !mi || !sec) return 0;
+
+    const char *since = strstr(units, "since");
+    if (!since) return 0;
+
+    char unit_buf[32] = {0};
+    if (sscanf(units, "%31s", unit_buf) != 1) return 0;
+
+    /* Normalize unit token to lower case */
+    for (char *p = unit_buf; *p; ++p) {
+        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    }
+
+    if (strcmp(unit_buf, "seconds") == 0 || strcmp(unit_buf, "second") == 0 ||
+        strcmp(unit_buf, "secs") == 0 || strcmp(unit_buf, "sec") == 0 || strcmp(unit_buf, "s") == 0) {
+        *unit_seconds = 1.0;
+    } else if (strcmp(unit_buf, "minutes") == 0 || strcmp(unit_buf, "minute") == 0 ||
+               strcmp(unit_buf, "mins") == 0 || strcmp(unit_buf, "min") == 0) {
+        *unit_seconds = 60.0;
+    } else if (strcmp(unit_buf, "hours") == 0 || strcmp(unit_buf, "hour") == 0 ||
+               strcmp(unit_buf, "hrs") == 0 || strcmp(unit_buf, "hr") == 0) {
+        *unit_seconds = 3600.0;
+    } else if (strcmp(unit_buf, "days") == 0 || strcmp(unit_buf, "day") == 0) {
+        *unit_seconds = 86400.0;
+    } else {
+        return 0;
+    }
+
+    /* Parse origin date/time after "since" */
+    const char *p = since + 5;
+    while (*p == ' ') p++;
+    int n = sscanf(p, "%d-%d-%d %d:%d:%lf", y, mo, d, h, mi, sec);
+    if (n < 3) return 0;
+    if (n == 3) { *h = 0; *mi = 0; *sec = 0.0; }
+    return 1;
+}
+
+static int64_t days_from_civil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int64_t)(era * 146097 + (int)doe - 719468);
+}
+
+static void civil_from_days(int64_t z, int *y, unsigned *m, unsigned *d) {
+    z += 719468;
+    const int era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = (unsigned)(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int y_tmp = (int)(yoe) + era * 400;
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const unsigned mp = (5 * doy + 2) / 153;
+    const unsigned d_tmp = doy - (153 * mp + 2) / 5 + 1;
+    const unsigned m_tmp = mp + (mp < 10 ? 3 : -9);
+    y_tmp += (m_tmp <= 2);
+
+    *y = y_tmp;
+    *m = m_tmp;
+    *d = d_tmp;
+}
+
+static int format_time_from_units(char *out, size_t outlen, double value, const char *units) {
+    double unit_seconds = 0.0;
+    int y, mo, d, h, mi;
+    double sec;
+    if (!parse_time_units(units, &unit_seconds, &y, &mo, &d, &h, &mi, &sec)) {
+        return 0;
+    }
+
+    int64_t days = days_from_civil(y, (unsigned)mo, (unsigned)d);
+    double total_sec = (double)days * 86400.0 + (double)h * 3600.0 + (double)mi * 60.0 + sec;
+    total_sec += value * unit_seconds;
+
+    int64_t out_days = (int64_t)(total_sec / 86400.0);
+    double rem = total_sec - (double)out_days * 86400.0;
+    if (rem < 0) {
+        rem += 86400.0;
+        out_days -= 1;
+    }
+
+    int out_y;
+    unsigned out_m, out_d;
+    civil_from_days(out_days, &out_y, &out_m, &out_d);
+
+    int out_h = (int)(rem / 3600.0);
+    rem -= out_h * 3600.0;
+    int out_mi = (int)(rem / 60.0);
+    rem -= out_mi * 60.0;
+    int out_s = (int)(rem + 0.5);
+
+    snprintf(out, outlen, "%04d-%02u-%02u %02d:%02d:%02d",
+             out_y, out_m, out_d, out_h, out_mi, out_s);
+    return 1;
+}
+
+static const USDimInfo *find_dim_info_for_dim(const char *dim_name) {
+    if (!current_dim_info || !dim_name) return NULL;
+    for (int i = 0; i < n_current_dims; i++) {
+        if (strcmp(current_dim_info[i].name, dim_name) == 0) {
+            return &current_dim_info[i];
+        }
+    }
+    return NULL;
+}
+
+static void format_dim_label(char *buf, size_t buflen,
+                             const char *label,
+                             size_t idx, size_t total,
+                             const USDimInfo *di,
+                             int is_time) {
+    if (!buf || buflen == 0) return;
+
+    if (di && di->values && idx < di->size) {
+        if (is_time && di->units[0]) {
+            char time_buf[64];
+            if (format_time_from_units(time_buf, sizeof(time_buf), di->values[idx], di->units)) {
+                /* Prefer date-only to keep the header compact */
+                char date_buf[16];
+                strncpy(date_buf, time_buf, 10);
+                date_buf[10] = '\0';
+                snprintf(buf, buflen, "%s %zu/%zu (%s)", label, idx + 1, total, date_buf);
+            } else if (di->units[0]) {
+                snprintf(buf, buflen, "%s %zu/%zu (%.4g %s)",
+                         label, idx + 1, total, di->values[idx], di->units);
+            } else {
+                snprintf(buf, buflen, "%s %zu/%zu (%.4g)",
+                         label, idx + 1, total, di->values[idx]);
+            }
+        } else if (di->units[0]) {
+            snprintf(buf, buflen, "%s %zu/%zu (%.4g %s)",
+                     label, idx + 1, total, di->values[idx], di->units);
+        } else {
+            snprintf(buf, buflen, "%s %zu/%zu (%.4g)",
+                     label, idx + 1, total, di->values[idx]);
+        }
+    } else {
+        snprintf(buf, buflen, "%s %zu/%zu", label, idx + 1, total);
+    }
+}
+
+static void update_dim_label(void) {
+    if (!view || !current_var) return;
+
+    char time_buf[128] = "Time: -/-";
+    char depth_buf[128] = "Depth: -/-";
+
+    if (current_var->time_dim_id >= 0) {
+        const char *name = current_var->dim_names[current_var->time_dim_id];
+        const USDimInfo *di = find_dim_info_for_dim(name);
+        format_dim_label(time_buf, sizeof(time_buf), "Time:",
+                         view->time_index, view->n_times, di, 1);
+    }
+    if (current_var->depth_dim_id >= 0) {
+        const char *name = current_var->dim_names[current_var->depth_dim_id];
+        const USDimInfo *di = find_dim_info_for_dim(name);
+        format_dim_label(depth_buf, sizeof(depth_buf), "Depth:",
+                         view->depth_index, view->n_depths, di, 0);
+    }
+
+    char combined[256];
+    snprintf(combined, sizeof(combined), "%s  %s", time_buf, depth_buf);
+    x_update_dim_label(combined);
+}
+
 static void on_dim_nav(int dim_index, int direction) {
     if (!view || !current_var || !current_dim_info) return;
     if (dim_index < 0 || dim_index >= n_current_dims) return;
@@ -313,6 +489,7 @@ static void on_dim_nav(int dim_index, int direction) {
     }
 
     update_dim_info_current();
+    update_dim_label();
     update_display();
 }
 
@@ -326,6 +503,7 @@ static void animation_tick(void) {
     }
 
     x_update_time(view->time_index, view->n_times);
+    update_dim_label();
     update_display();
 
     /* Schedule next tick */

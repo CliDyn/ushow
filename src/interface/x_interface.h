@@ -84,6 +84,7 @@ void x_update_depth(size_t depth_idx, size_t n_depths);
  * Update info labels.
  */
 void x_update_var_name(const char *name);
+void x_update_dim_label(const char *text);
 void x_update_range_label(float min_val, float max_val);
 void x_update_colormap_label(const char *name);
 void x_update_value_label(double lon, double lat, float value);
