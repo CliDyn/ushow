@@ -51,6 +51,17 @@ void colormap_apply(const USColormap *cmap, const float *data,
                     unsigned char *pixels);
 
 /*
+ * Convert data array to RGB pixels with scaling.
+ * data: input data [data_ny * data_nx]
+ * pixels: output RGB pixels [data_ny * scale * data_nx * scale * 3]
+ * scale: magnification factor (each data pixel becomes scale x scale display pixels)
+ */
+void colormap_apply_scaled(const USColormap *cmap, const float *data,
+                           size_t data_nx, size_t data_ny,
+                           float min_val, float max_val, float fill_value,
+                           unsigned char *pixels, int scale);
+
+/*
  * Free colormap resources.
  */
 void colormaps_cleanup(void);

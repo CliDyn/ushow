@@ -32,6 +32,7 @@ static Widget time_label;
 static Widget depth_label;
 static Widget range_label;
 static Widget cmap_label;
+static Widget value_label;
 static Widget time_scrollbar;
 static Widget depth_scrollbar;
 
@@ -63,30 +64,50 @@ static size_t current_n_depths = 1;
 /* Forward declarations */
 static void redraw_image(Widget w, XtPointer client_data, XtPointer call_data);
 
+/* Mouse motion callback */
+typedef void (*MouseMotionCallback)(int x, int y);
+static MouseMotionCallback mouse_motion_cb = NULL;
+
 /* Button callbacks */
 static void var_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)call_data;
     int idx = (int)(intptr_t)client_data;
     if (var_select_cb) var_select_cb(idx);
 }
 
+static void rewind_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
+    if (animation_cb) animation_cb(-2);  /* -2 = rewind to start */
+}
+
 static void back_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
     if (animation_cb) animation_cb(-1);
 }
 
 static void pause_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
     if (animation_cb) animation_cb(0);
 }
 
 static void forward_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
     if (animation_cb) animation_cb(1);
 }
 
+static void ffwd_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
+    if (animation_cb) animation_cb(2);  /* 2 = fast forward (continuous) */
+}
+
 static void cmap_button_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
     if (colormap_cb) colormap_cb();
 }
 
 /* Scrollbar callbacks */
 static void time_scroll_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data;
     float percent = *(float *)call_data;
     if (percent < 0.0f) percent = 0.0f;
     if (percent > 1.0f) percent = 1.0f;
@@ -95,6 +116,7 @@ static void time_scroll_callback(Widget w, XtPointer client_data, XtPointer call
 }
 
 static void depth_scroll_callback(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data;
     float percent = *(float *)call_data;
     if (percent < 0.0f) percent = 0.0f;
     if (percent > 1.0f) percent = 1.0f;
@@ -104,15 +126,25 @@ static void depth_scroll_callback(Widget w, XtPointer client_data, XtPointer cal
 
 /* Timer callback wrapper */
 static void timer_callback_wrapper(XtPointer client_data, XtIntervalId *id) {
+    (void)client_data; (void)id;
     timer_id = 0;
     if (timer_callback) timer_callback();
 }
 
 /* Expose callback for image widget */
 static void expose_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
+    (void)client_data; (void)cont;
     if (event->type == Expose && ximage && gc != None) {
         XPutImage(display, XtWindow(w), gc, ximage, 0, 0, 0, 0,
                   image_width, image_height);
+    }
+}
+
+/* Motion callback for mouse position tracking */
+static void motion_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
+    (void)w; (void)client_data; (void)cont;
+    if (event->type == MotionNotify && mouse_motion_cb) {
+        mouse_motion_cb(event->xmotion.x, event->xmotion.y);
     }
 }
 
@@ -192,8 +224,8 @@ int x_init(int *argc, char **argv) {
     /* Image display area */
     image_widget = XtVaCreateManagedWidget(
         "imageWidget", simpleWidgetClass, main_form,
-        XtNwidth, 360,
-        XtNheight, 180,
+        XtNwidth, 720,
+        XtNheight, 360,
         XtNfromVert, info_label,
         XtNtop, XtChainTop,
         XtNbottom, XtChainBottom,
@@ -202,6 +234,7 @@ int x_init(int *argc, char **argv) {
         NULL
     );
     XtAddEventHandler(image_widget, ExposureMask, False, expose_callback, NULL);
+    XtAddEventHandler(image_widget, PointerMotionMask, False, motion_callback, NULL);
 
     /* Control box (bottom) */
     control_box = XtVaCreateManagedWidget(
@@ -215,26 +248,40 @@ int x_init(int *argc, char **argv) {
     );
 
     /* Animation buttons */
+    Widget rewind_btn = XtVaCreateManagedWidget(
+        "rewindBtn", commandWidgetClass, control_box,
+        XtNlabel, "|<",
+        NULL
+    );
+    XtAddCallback(rewind_btn, XtNcallback, rewind_button_callback, NULL);
+
     Widget back_btn = XtVaCreateManagedWidget(
         "backBtn", commandWidgetClass, control_box,
-        XtNlabel, "< Back",
+        XtNlabel, "<",
         NULL
     );
     XtAddCallback(back_btn, XtNcallback, back_button_callback, NULL);
 
     Widget pause_btn = XtVaCreateManagedWidget(
         "pauseBtn", commandWidgetClass, control_box,
-        XtNlabel, "|| Pause",
+        XtNlabel, "||",
         NULL
     );
     XtAddCallback(pause_btn, XtNcallback, pause_button_callback, NULL);
 
     Widget fwd_btn = XtVaCreateManagedWidget(
         "fwdBtn", commandWidgetClass, control_box,
-        XtNlabel, "Fwd >",
+        XtNlabel, ">",
         NULL
     );
     XtAddCallback(fwd_btn, XtNcallback, forward_button_callback, NULL);
+
+    Widget ffwd_btn = XtVaCreateManagedWidget(
+        "ffwdBtn", commandWidgetClass, control_box,
+        XtNlabel, ">>",
+        NULL
+    );
+    XtAddCallback(ffwd_btn, XtNcallback, ffwd_button_callback, NULL);
 
     /* Time controls */
     time_label = XtVaCreateManagedWidget(
@@ -270,6 +317,15 @@ int x_init(int *argc, char **argv) {
     );
     XtAddCallback(depth_scrollbar, XtNjumpProc, depth_scroll_callback, NULL);
 
+    /* Value display label (shows mouse position and data value) */
+    value_label = XtVaCreateManagedWidget(
+        "valueLabel", labelWidgetClass, control_box,
+        XtNlabel, "                                        ",
+        XtNborderWidth, 0,
+        XtNwidth, 200,
+        NULL
+    );
+
     /* Realize the widget hierarchy */
     XtRealizeWidget(top_level);
 
@@ -284,6 +340,7 @@ void x_set_time_callback(TimeChangeCallback cb) { time_change_cb = cb; }
 void x_set_depth_callback(DepthChangeCallback cb) { depth_change_cb = cb; }
 void x_set_animation_callback(AnimationCallback cb) { animation_cb = cb; }
 void x_set_colormap_callback(ColormapCallback cb) { colormap_cb = cb; }
+void x_set_mouse_callback(void (*cb)(int, int)) { mouse_motion_cb = cb; }
 
 void x_setup_var_selector(const char **var_names, int n_vars) {
     /* Free old buttons */
@@ -428,6 +485,12 @@ void x_update_colormap_label(const char *name) {
     char buf[64];
     snprintf(buf, sizeof(buf), "Colormap: %s", name);
     XtVaSetValues(cmap_label, XtNlabel, buf, NULL);
+}
+
+void x_update_value_label(double lon, double lat, float value) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Lon: %.2f  Lat: %.2f  Val: %.4g", lon, lat, value);
+    XtVaSetValues(value_label, XtNlabel, buf, NULL);
 }
 
 void x_set_timer(int delay_ms, void (*callback)(void)) {

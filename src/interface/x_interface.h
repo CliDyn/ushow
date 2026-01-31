@@ -27,6 +27,7 @@ void x_set_time_callback(TimeChangeCallback cb);
 void x_set_depth_callback(DepthChangeCallback cb);
 void x_set_animation_callback(AnimationCallback cb);
 void x_set_colormap_callback(ColormapCallback cb);
+void x_set_mouse_callback(void (*cb)(int x, int y));
 
 /*
  * Set up variable selector buttons.
@@ -57,6 +58,7 @@ void x_update_depth(size_t depth_idx, size_t n_depths);
 void x_update_var_name(const char *name);
 void x_update_range_label(float min_val, float max_val);
 void x_update_colormap_label(const char *name);
+void x_update_value_label(double lon, double lat, float value);
 
 /*
  * Set animation timer.

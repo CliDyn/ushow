@@ -227,6 +227,55 @@ void colormap_apply(const USColormap *cmap, const float *data,
     }
 }
 
+void colormap_apply_scaled(const USColormap *cmap, const float *data,
+                           size_t data_nx, size_t data_ny,
+                           float min_val, float max_val, float fill_value,
+                           unsigned char *pixels, int scale) {
+    if (!cmap || !data || !pixels || scale < 1) return;
+
+    float range = max_val - min_val;
+    if (range <= 0.0f) range = 1.0f;
+
+    size_t display_nx = data_nx * scale;
+
+    /* Flip y-axis and apply scaling */
+    for (size_t data_y = 0; data_y < data_ny; data_y++) {
+        size_t src_row = data_ny - 1 - data_y;  /* Flip: screen top = north */
+
+        for (size_t data_x = 0; data_x < data_nx; data_x++) {
+            size_t src_idx = src_row * data_nx + data_x;
+            float v = data[src_idx];
+
+            unsigned char r, g, b;
+
+            /* Check for fill value or NaN */
+            if (fabsf(v) > 1e10f || v != v ||
+                fabsf(v - fill_value) < 1e-6f * fabsf(fill_value)) {
+                /* Missing data: draw as dark gray */
+                r = g = b = 30;
+            } else {
+                /* Normalize to [0, 1] */
+                float t = (v - min_val) / range;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                colormap_map_value(cmap, t, &r, &g, &b);
+            }
+
+            /* Replicate pixel to scale x scale block */
+            for (int sy = 0; sy < scale; sy++) {
+                size_t disp_y = data_y * scale + sy;
+                for (int sx = 0; sx < scale; sx++) {
+                    size_t disp_x = data_x * scale + sx;
+                    size_t dst_idx = disp_y * display_nx + disp_x;
+                    pixels[dst_idx * 3 + 0] = r;
+                    pixels[dst_idx * 3 + 1] = g;
+                    pixels[dst_idx * 3 + 2] = b;
+                }
+            }
+        }
+    }
+}
+
 void colormaps_cleanup(void) {
     for (int i = 0; i < n_colormaps; i++) {
         free(colormaps[i].colors);

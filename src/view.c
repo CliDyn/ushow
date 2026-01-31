@@ -10,10 +10,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Default scale factor for display */
+#define DEFAULT_SCALE_FACTOR 2
+
 USView *view_create(void) {
     USView *view = calloc(1, sizeof(USView));
     if (!view) return NULL;
     view->frame_delay_ms = 200;  /* Default animation speed */
+    view->scale_factor = DEFAULT_SCALE_FACTOR;
     return view;
 }
 
@@ -33,22 +37,27 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     /* Get target grid dimensions */
     size_t nx, ny;
     regrid_get_target_dims(regrid, &nx, &ny);
-    view->display_nx = nx;
-    view->display_ny = ny;
+    view->data_nx = nx;
+    view->data_ny = ny;
+
+    /* Apply scale factor for display */
+    view->display_nx = nx * view->scale_factor;
+    view->display_ny = ny * view->scale_factor;
 
     /* Allocate buffers */
     size_t n_points = mesh->n_points;
-    size_t n_target = nx * ny;
+    size_t n_data = nx * ny;
+    size_t n_display = view->display_nx * view->display_ny;
 
     free(view->raw_data);
     view->raw_data = malloc(n_points * sizeof(float));
     view->raw_data_size = n_points;
 
     free(view->regridded_data);
-    view->regridded_data = malloc(n_target * sizeof(float));
+    view->regridded_data = malloc(n_data * sizeof(float));
 
     free(view->pixels);
-    view->pixels = malloc(n_target * 3);  /* RGB */
+    view->pixels = malloc(n_display * 3);  /* RGB */
 
     if (!view->raw_data || !view->regridded_data || !view->pixels) {
         fprintf(stderr, "Failed to allocate view buffers\n");
@@ -117,14 +126,15 @@ int view_update(USView *view) {
     regrid_apply(view->regrid, view->raw_data,
                  view->variable->fill_value, view->regridded_data);
 
-    /* Convert to pixels */
+    /* Convert to pixels with scaling */
     USColormap *cmap = colormap_get_current();
     if (cmap) {
-        colormap_apply(cmap, view->regridded_data,
-                       view->display_nx, view->display_ny,
-                       view->variable->user_min, view->variable->user_max,
-                       view->variable->fill_value,
-                       view->pixels);
+        colormap_apply_scaled(cmap, view->regridded_data,
+                              view->data_nx, view->data_ny,
+                              view->variable->user_min, view->variable->user_max,
+                              view->variable->fill_value,
+                              view->pixels,
+                              view->scale_factor);
     }
 
     view->data_valid = 1;

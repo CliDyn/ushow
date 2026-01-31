@@ -80,7 +80,16 @@ static void on_animation(int direction) {
         animating = 0;
         x_clear_timer();
     } else if (direction == 1) {
-        /* Forward */
+        /* Single step forward */
+        animating = 0;
+        x_clear_timer();
+        if (view) {
+            view_step_time(view, 1);
+            x_update_time(view->time_index, view->n_times);
+            update_display();
+        }
+    } else if (direction == 2) {
+        /* Continuous forward animation */
         if (!animating) {
             animating = 1;
             animation_tick();
@@ -94,6 +103,15 @@ static void on_animation(int direction) {
             x_update_time(view->time_index, view->n_times);
             update_display();
         }
+    } else if (direction == -2) {
+        /* Rewind to start */
+        animating = 0;
+        x_clear_timer();
+        if (view) {
+            view_set_time(view, 0);
+            x_update_time(view->time_index, view->n_times);
+            update_display();
+        }
     }
 }
 
@@ -104,6 +122,30 @@ static void on_colormap_change(void) {
         x_update_colormap_label(cmap->name);
         update_display();
     }
+}
+
+static void on_mouse_motion(int px, int py) {
+    if (!view || !view->regrid || !view->regridded_data) return;
+
+    /* Convert pixel coordinates to data grid coordinates */
+    int scale = view->scale_factor;
+    size_t data_x = px / scale;
+    size_t data_y = py / scale;
+
+    /* Bounds check */
+    if (data_x >= view->data_nx || data_y >= view->data_ny) return;
+
+    /* Convert to lon/lat (remember y is flipped in display) */
+    size_t src_y = view->data_ny - 1 - data_y;
+    double lon, lat;
+    regrid_get_lonlat(view->regrid, data_x, src_y, &lon, &lat);
+
+    /* Get data value */
+    size_t idx = src_y * view->data_nx + data_x;
+    float value = view->regridded_data[idx];
+
+    /* Update display */
+    x_update_value_label(lon, lat, value);
 }
 
 static void animation_tick(void) {
@@ -261,6 +303,7 @@ int main(int argc, char *argv[]) {
     x_set_depth_callback(on_depth_change);
     x_set_animation_callback(on_animation);
     x_set_colormap_callback(on_colormap_change);
+    x_set_mouse_callback(on_mouse_motion);
 
     /* Set up variable selector */
     const char **var_names = malloc(n_variables * sizeof(char *));

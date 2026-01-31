@@ -165,9 +165,13 @@ struct USView {
     /* Regridded data buffer */
     float      *regridded_data;     /* [target_ny * target_nx] */
 
-    /* Pixel buffer for display */
-    unsigned char *pixels;          /* [target_ny * target_nx * 3] RGB */
+    /* Data grid dimensions (from regrid) */
+    size_t      data_nx, data_ny;
+
+    /* Pixel buffer for display (scaled) */
+    unsigned char *pixels;          /* [display_ny * display_nx * 3] RGB */
     size_t      display_nx, display_ny;
+    int         scale_factor;       /* Display magnification */
 
     /* Data status */
     int         data_valid;
