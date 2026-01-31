@@ -1,0 +1,24 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Build directories
+obj/
+build/
+dist/
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/
+
+# Generated outputs
+*.ppm
+
+# Logs
+*.log
