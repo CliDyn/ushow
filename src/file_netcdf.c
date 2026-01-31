@@ -13,6 +13,8 @@
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
 static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "deptht", "depthu", "depthv", "depthw", NULL};
 static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d", NULL};
+static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
+static const char *LON_NAMES[] = {"lon", "longitude", "x", "nlon", "rlon", "i", NULL};
 
 /* Check if a name matches any in a list */
 static int matches_name_list(const char *name, const char **list) {
@@ -83,6 +85,8 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
         int time_dim = -1;
         int depth_dim = -1;
         int node_dim = -1;
+        int lat_dim = -1;
+        int lon_dim = -1;
 
         for (int d = 0; d < var_ndims; d++) {
             nc_inq_dim(ncid, dimids[d], dim_names[d], &dim_sizes[d]);
@@ -93,17 +97,30 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
                 depth_dim = d;
             } else if (matches_name_list(dim_names[d], NODE_NAMES)) {
                 node_dim = d;
+            } else if (matches_name_list(dim_names[d], LAT_NAMES)) {
+                lat_dim = d;
+            } else if (matches_name_list(dim_names[d], LON_NAMES)) {
+                lon_dim = d;
             }
         }
 
-        /* For unstructured data, the last dimension should match mesh size */
+        /* For unstructured data, find node dimension by name or size match */
         if (node_dim < 0) {
-            /* Try to find node dimension by size match */
             for (int d = var_ndims - 1; d >= 0; d--) {
                 if (dim_sizes[d] == mesh->n_points) {
                     node_dim = d;
                     break;
                 }
+            }
+        }
+
+        /* For structured data, check if lat*lon = n_points */
+        int is_structured = 0;
+        if (node_dim < 0 && lat_dim >= 0 && lon_dim >= 0) {
+            if (dim_sizes[lat_dim] * dim_sizes[lon_dim] == mesh->n_points) {
+                is_structured = 1;
+                /* Use the last spatial dimension as "node_dim" for reading */
+                node_dim = (lat_dim > lon_dim) ? lat_dim : lon_dim;
             }
         }
 

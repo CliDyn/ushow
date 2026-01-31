@@ -30,7 +30,8 @@ SRCS = $(SRCDIR)/ushow.c \
        $(SRCDIR)/file_netcdf.c \
        $(SRCDIR)/colormaps.c \
        $(SRCDIR)/view.c \
-       $(SRCDIR)/interface/x_interface.c
+       $(SRCDIR)/interface/x_interface.c \
+       $(SRCDIR)/interface/colorbar.c
 
 # Objects
 OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
@@ -73,7 +74,10 @@ $(OBJDIR)/colormaps.o: $(SRCDIR)/colormaps.c $(SRCDIR)/colormaps.h $(SRCDIR)/ush
 $(OBJDIR)/view.o: $(SRCDIR)/view.c $(SRCDIR)/view.h $(SRCDIR)/file_netcdf.h \
                   $(SRCDIR)/regrid.h $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/interface/x_interface.o: $(SRCDIR)/interface/x_interface.c \
-                                    $(SRCDIR)/interface/x_interface.h $(SRCDIR)/ushow.defines.h
+                                    $(SRCDIR)/interface/x_interface.h \
+                                    $(SRCDIR)/interface/colorbar.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/interface/colorbar.o: $(SRCDIR)/interface/colorbar.c \
+                                 $(SRCDIR)/interface/colorbar.h $(SRCDIR)/colormaps.h
 
 # Print configuration
 info:

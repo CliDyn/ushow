@@ -112,6 +112,32 @@ int view_step_time(USView *view, int delta) {
     return new_idx;
 }
 
+int view_set_scale(USView *view, int scale) {
+    if (!view) return -1;
+    if (scale < 1) scale = 1;
+    if (scale > 8) scale = 8;  /* Cap at 8x zoom */
+
+    if (view->scale_factor == scale) return 0;  /* No change */
+
+    view->scale_factor = scale;
+
+    /* Recalculate display dimensions */
+    view->display_nx = view->data_nx * scale;
+    view->display_ny = view->data_ny * scale;
+
+    /* Reallocate pixel buffer */
+    size_t n_display = view->display_nx * view->display_ny;
+    free(view->pixels);
+    view->pixels = malloc(n_display * 3);
+    if (!view->pixels) {
+        fprintf(stderr, "Failed to reallocate pixel buffer\n");
+        return -1;
+    }
+
+    view->data_valid = 0;
+    return 0;
+}
+
 int view_update(USView *view) {
     if (!view || !view->variable || !view->mesh || !view->regrid) return -1;
 
@@ -154,4 +180,28 @@ void view_free(USView *view) {
     free(view->regridded_data);
     free(view->pixels);
     free(view);
+}
+
+int view_save_ppm(USView *view, const char *filename) {
+    if (!view || !view->pixels || !filename) return -1;
+
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) {
+        fprintf(stderr, "Failed to open file for writing: %s\n", filename);
+        return -1;
+    }
+
+    /* Write PPM header */
+    fprintf(fp, "P6\n%zu %zu\n255\n", view->display_nx, view->display_ny);
+
+    /* Write pixel data (already in RGB format) */
+    size_t n_bytes = view->display_nx * view->display_ny * 3;
+    if (fwrite(view->pixels, 1, n_bytes, fp) != n_bytes) {
+        fprintf(stderr, "Failed to write pixel data\n");
+        fclose(fp);
+        return -1;
+    }
+
+    fclose(fp);
+    return 0;
 }

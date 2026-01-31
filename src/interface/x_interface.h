@@ -28,6 +28,9 @@ void x_set_depth_callback(DepthChangeCallback cb);
 void x_set_animation_callback(AnimationCallback cb);
 void x_set_colormap_callback(ColormapCallback cb);
 void x_set_mouse_callback(void (*cb)(int x, int y));
+void x_set_range_callback(void (*cb)(int action));  /* 0=min-, 1=min+, 2=max-, 3=max+ */
+void x_set_zoom_callback(void (*cb)(int delta));    /* +1=zoom in, -1=zoom out */
+void x_set_save_callback(void (*cb)(void));         /* save button pressed */
 
 /*
  * Set up variable selector buttons.
@@ -59,6 +62,12 @@ void x_update_var_name(const char *name);
 void x_update_range_label(float min_val, float max_val);
 void x_update_colormap_label(const char *name);
 void x_update_value_label(double lon, double lat, float value);
+
+/*
+ * Update colorbar with current colormap and value range.
+ * height: colorbar height in pixels (should match image height)
+ */
+void x_update_colorbar(float min_val, float max_val, size_t height);
 
 /*
  * Set animation timer.

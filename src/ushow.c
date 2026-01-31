@@ -148,6 +148,64 @@ static void on_mouse_motion(int px, int py) {
     x_update_value_label(lon, lat, value);
 }
 
+static void on_range_adjust(int action) {
+    if (!current_var) return;
+
+    float range = current_var->user_max - current_var->user_min;
+    float step = range * 0.1f;  /* 10% adjustment */
+    if (step < 0.001f) step = 0.001f;
+
+    switch (action) {
+        case 0:  /* min down */
+            current_var->user_min -= step;
+            break;
+        case 1:  /* min up */
+            current_var->user_min += step;
+            if (current_var->user_min >= current_var->user_max - step) {
+                current_var->user_min = current_var->user_max - step;
+            }
+            break;
+        case 2:  /* max down */
+            current_var->user_max -= step;
+            if (current_var->user_max <= current_var->user_min + step) {
+                current_var->user_max = current_var->user_min + step;
+            }
+            break;
+        case 3:  /* max up */
+            current_var->user_max += step;
+            break;
+    }
+
+    x_update_range_label(current_var->user_min, current_var->user_max);
+    update_display();
+}
+
+static void on_zoom(int delta) {
+    if (!view) return;
+
+    int new_scale = view->scale_factor + delta;
+    if (view_set_scale(view, new_scale) == 0) {
+        printf("Zoom: %dx\n", view->scale_factor);
+        update_display();
+    }
+}
+
+static void on_save(void) {
+    if (!view || !current_var) return;
+
+    /* Generate filename from variable name and time/depth indices */
+    char filename[512];
+    snprintf(filename, sizeof(filename), "%s_t%zu_d%zu.ppm",
+             current_var->name, view->time_index, view->depth_index);
+
+    if (view_save_ppm(view, filename) == 0) {
+        printf("Saved: %s (%zux%zu pixels)\n", filename,
+               view->display_nx, view->display_ny);
+    } else {
+        fprintf(stderr, "Failed to save image\n");
+    }
+}
+
 static void animation_tick(void) {
     if (!animating || !view) return;
 
@@ -175,6 +233,11 @@ static void update_display(void) {
     unsigned char *pixels = view_get_pixels(view, &width, &height);
     if (pixels) {
         x_update_image(pixels, width, height);
+
+        /* Update colorbar (256 pixels wide, horizontal) */
+        if (current_var) {
+            x_update_colorbar(current_var->user_min, current_var->user_max, 256);
+        }
     }
 }
 
@@ -304,6 +367,9 @@ int main(int argc, char *argv[]) {
     x_set_animation_callback(on_animation);
     x_set_colormap_callback(on_colormap_change);
     x_set_mouse_callback(on_mouse_motion);
+    x_set_range_callback(on_range_adjust);
+    x_set_zoom_callback(on_zoom);
+    x_set_save_callback(on_save);
 
     /* Set up variable selector */
     const char **var_names = malloc(n_variables * sizeof(char *));
