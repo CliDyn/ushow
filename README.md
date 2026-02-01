@@ -112,6 +112,26 @@ Higher resolution display:
 ```bash
 ./ushow data.nc -r 0.5  # 0.5 degree grid (720x360)
 ```
+## Testing
+
+Run the test suite:
+```bash
+make test
+```
+
+Clean test binaries:
+```bash
+make test-clean
+```
+
+The test suite includes:
+- **test_kdtree**: Spatial indexing and nearest-neighbor queries
+- **test_mesh**: Coordinate transformations (lon/lat to Cartesian)
+- **test_regrid**: Interpolation to regular grids
+- **test_colormaps**: Color mapping functions
+- **test_file_netcdf**: NetCDF file I/O
+- **test_integration**: End-to-end workflow tests
+
 
 ## Interface
 
