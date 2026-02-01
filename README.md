@@ -14,23 +14,74 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 
 Requirements:
 - NetCDF-C library
-- X11 development libraries (libX11, libXt, libXaw)
+- X11 development libraries (libX11, libXt, libXaw, libXmu, libXext, libSM, libICE)
 - C compiler (gcc or clang)
 
-macOS (Homebrew):
+### macOS (Homebrew + XQuartz)
+
+Install dependencies:
 ```bash
-brew install netcdf libx11 libxt libxaw
+brew install netcdf
 ```
 
-Linux (Debian/Ubuntu):
+Install [XQuartz](https://www.xquartz.org/) for X11 support. After installation, the X11 libraries will be in `/opt/X11`.
+
+Build:
 ```bash
-sudo apt-get install libnetcdf-dev libx11-dev libxt-dev libxaw7-dev
+make
+```
+
+The Makefile auto-detects XQuartz at `/opt/X11`.
+
+### Linux (Debian/Ubuntu)
+
+Install dependencies:
+```bash
+sudo apt-get install libnetcdf-dev libx11-dev libxt-dev libxaw7-dev libxmu-dev libxext-dev
 ```
 
 Build:
 ```bash
 make
 ```
+
+### DKRZ Levante
+
+On Levante, the Makefile automatically uses the DKRZ spack-installed libraries:
+- NetCDF-C from `/sw/spack-levante/netcdf-c-4.8.1-qk24yp`
+- X11 libraries from `/sw/spack-levante/libx*`
+
+No modules need to be loaded. Simply run:
+```bash
+make
+```
+
+The binary will have the library paths embedded (via rpath), so it runs without setting `LD_LIBRARY_PATH`.
+
+### Custom Library Paths
+
+If your libraries are in non-standard locations, you can override the detection:
+
+```bash
+# Custom nc-config location
+make NC_CONFIG=/path/to/nc-config
+
+# Custom X11 prefix (libraries in $X11_PREFIX/lib, headers in $X11_PREFIX/include)
+make X11_PREFIX=/path/to/x11
+
+# Both
+make NC_CONFIG=/path/to/nc-config X11_PREFIX=/path/to/x11
+```
+
+### Verifying the Build
+
+After building, verify all libraries are found:
+```bash
+ldd ./ushow          # Linux
+otool -L ./ushow     # macOS
+```
+
+No libraries should show as "not found".
 
 ## Usage
 
@@ -107,8 +158,32 @@ Automatically identifies dimension roles:
 
 ## Troubleshooting
 
-- **X11 on macOS**: Install XQuartz and ensure it is running.
-- **SSH**: Use `ssh -X` for X11 forwarding.
+### X11 Issues
+
+- **X11 on macOS**: Install [XQuartz](https://www.xquartz.org/) and ensure it is running before launching ushow.
+- **SSH**: Use `ssh -X` (or `ssh -Y` for trusted forwarding) to enable X11 forwarding.
+- **DISPLAY not set**: Ensure the `DISPLAY` environment variable is set. On SSH, this is set automatically with `-X`.
+
+### Library Issues
+
+- **"cannot open shared object file"**: The runtime linker cannot find a library. The Makefile embeds library paths via rpath, but if you move the binary or libraries, you may need to set `LD_LIBRARY_PATH`:
+  ```bash
+  export LD_LIBRARY_PATH=/path/to/libs:$LD_LIBRARY_PATH
+  ./ushow data.nc
+  ```
+
+- **Symbol lookup error**: This usually indicates mixing libraries from different installations (e.g., system vs conda). Rebuild with libraries from a single source:
+  ```bash
+  make clean
+  make NC_CONFIG=/path/to/consistent/nc-config X11_PREFIX=/path/to/consistent/x11
+  ```
+
+- **Verify library paths**: Use `ldd ./ushow` (Linux) or `otool -L ./ushow` (macOS) to check which libraries are being loaded.
+
+### Build Issues
+
+- **Missing headers**: Install the development packages for the missing library. On Debian/Ubuntu, these typically end in `-dev`.
+- **nc-config not found**: Install NetCDF-C or specify the path: `make NC_CONFIG=/path/to/nc-config`
 
 ## Performance
 
