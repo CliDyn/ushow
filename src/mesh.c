@@ -6,6 +6,7 @@
 #include <netcdf.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -150,10 +151,38 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     CoordType coord_type;
     size_t orig_nx = 0, orig_ny = 0;
 
+    /* Check dimension names to distinguish structured from unstructured */
+    int lon_dim_id, lat_dim_id;
+    char lon_dimname[MAX_NAME_LEN] = "", lat_dimname[MAX_NAME_LEN] = "";
+    if (lon_info.ndims >= 1) {
+        nc_inq_vardimid(mesh_ncid, lon_info.varid, &lon_dim_id);
+        nc_inq_dimname(mesh_ncid, lon_dim_id, lon_dimname);
+    }
+    if (lat_info.ndims >= 1) {
+        nc_inq_vardimid(mesh_ncid, lat_info.varid, &lat_dim_id);
+        nc_inq_dimname(mesh_ncid, lat_dim_id, lat_dimname);
+    }
+
+    /* Check if dimension names suggest unstructured (node-like) coordinates */
+    static const char *NODE_DIM_NAMES[] = {
+        "nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d",
+        "cell", "cells", "elem", "vertex", "vertices", NULL
+    };
+    int lon_is_node_dim = 0, lat_is_node_dim = 0;
+    for (int i = 0; NODE_DIM_NAMES[i] != NULL; i++) {
+        if (strcasecmp(lon_dimname, NODE_DIM_NAMES[i]) == 0) lon_is_node_dim = 1;
+        if (strcasecmp(lat_dimname, NODE_DIM_NAMES[i]) == 0) lat_is_node_dim = 1;
+    }
+
     /* Determine coordinate type and load accordingly */
     if (lon_info.ndims == 1 && lat_info.ndims == 1) {
-        if (lon_info.total_size == lat_info.total_size) {
-            /* Same size 1D arrays -> unstructured */
+        /* If both use node-like dimension names and same size, it's unstructured */
+        int is_unstructured = (lon_info.total_size == lat_info.total_size) &&
+                              (lon_is_node_dim || lat_is_node_dim ||
+                               lon_dim_id == lat_dim_id);  /* Same dimension = unstructured */
+
+        if (is_unstructured) {
+            /* Same size 1D arrays with node-like dims -> unstructured */
             coord_type = COORD_TYPE_1D_UNSTRUCTURED;
             n_points = lon_info.total_size;
             printf("Detected: 1D unstructured coordinates (%zu points)\n", n_points);

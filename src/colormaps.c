@@ -104,8 +104,13 @@ static void create_hot_colormap(USColormap *cmap) {
 static USColormap colormaps[MAX_COLORMAPS];
 static int n_colormaps = 0;
 static int current_colormap = 0;
+static int colormaps_initialized = 0;
 
 void colormaps_init(void) {
+    /* Prevent double initialization */
+    if (colormaps_initialized) return;
+    colormaps_initialized = 1;
+
     /* Create built-in colormaps */
     create_viridis_colormap(&colormaps[n_colormaps++]);
     create_hot_colormap(&colormaps[n_colormaps++]);

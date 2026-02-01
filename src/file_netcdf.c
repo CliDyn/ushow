@@ -153,8 +153,25 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
 
         nc_inq_var(ncid, varid, varname, &vartype, &var_ndims, dimids, NULL);
 
-        /* Skip 1D variables and coordinate variables */
-        if (var_ndims < 2) continue;
+        /* Skip 0D (scalar) variables */
+        if (var_ndims < 1) continue;
+
+        /* For 1D variables, only allow if they match unstructured mesh size
+           and are not coordinate variables */
+        if (var_ndims == 1) {
+            size_t dim_size;
+            char dim_name[MAX_NAME_LEN];
+            nc_inq_dim(ncid, dimids[0], dim_name, &dim_size);
+
+            /* Skip if it's a coordinate variable name */
+            if (is_coord_dim(ncid, varname)) continue;
+
+            /* Skip if dimension doesn't match mesh size */
+            if (dim_size != mesh->n_points) continue;
+
+            /* Skip if mesh is not unstructured */
+            if (mesh->coord_type != COORD_TYPE_1D_UNSTRUCTURED) continue;
+        }
 
         /* Get dimension info */
         size_t dim_sizes[MAX_DIMS];

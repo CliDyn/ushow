@@ -79,7 +79,7 @@ OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 # Target
 TARGET = $(BINDIR)/ushow
 
-.PHONY: all clean dirs
+.PHONY: all clean dirs test test-clean
 
 all: dirs $(TARGET)
 
@@ -126,3 +126,10 @@ info:
 	@echo "LIBS: $(LIBS)"
 	@echo "SRCS: $(SRCS)"
 	@echo "OBJS: $(OBJS)"
+
+# Test targets
+test:
+	@$(MAKE) -C tests run-tests
+
+test-clean:
+	@$(MAKE) -C tests clean
