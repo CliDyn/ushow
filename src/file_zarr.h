@@ -61,5 +61,37 @@ void zarr_free_dim_info(USDimInfo *dims, int n_dims);
  */
 void zarr_close(USFile *file);
 
+/*
+ * Multi-file zarr support
+ */
+
+/*
+ * Create a zarr file set from a glob pattern.
+ * Returns NULL on error or if no files match.
+ */
+USFileSet *zarr_open_glob(const char *pattern);
+
+/*
+ * Create a zarr file set from an array of paths.
+ * Returns NULL on error.
+ */
+USFileSet *zarr_open_fileset(const char **paths, int n_files);
+
+/*
+ * Read a slice from a zarr file set using virtual time index.
+ */
+int zarr_read_slice_fileset(USFileSet *fs, USVar *var,
+                            size_t virtual_time, size_t depth_idx, float *data);
+
+/*
+ * Get dimension info with virtual time from zarr fileset.
+ */
+USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out);
+
+/*
+ * Close all zarr stores in a file set.
+ */
+void zarr_close_fileset(USFileSet *fs);
+
 #endif /* HAVE_ZARR */
 #endif /* FILE_ZARR_H */

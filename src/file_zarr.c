@@ -941,4 +941,381 @@ static int matches_name_list(const char *name, const char **list) {
     return 0;
 }
 
+/* ---- Multi-file zarr support ---- */
+
+#include <glob.h>
+
+/* Comparison function for sorting filenames */
+static int compare_strings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+USFileSet *zarr_open_fileset(const char **paths, int n_files) {
+    if (!paths || n_files <= 0) return NULL;
+
+    USFileSet *fs = calloc(1, sizeof(USFileSet));
+    if (!fs) return NULL;
+
+    fs->files = calloc(n_files, sizeof(USFile *));
+    fs->time_offsets = calloc(n_files + 1, sizeof(size_t));
+    if (!fs->files || !fs->time_offsets) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+
+    /* Create sorted copy of paths */
+    char **sorted_paths = malloc(n_files * sizeof(char *));
+    if (!sorted_paths) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+    for (int i = 0; i < n_files; i++) {
+        sorted_paths[i] = strdup(paths[i]);
+    }
+    qsort(sorted_paths, n_files, sizeof(char *), compare_strings);
+
+    /* Open each zarr store and count time steps */
+    fs->time_offsets[0] = 0;
+    for (int i = 0; i < n_files; i++) {
+        printf("Opening zarr file %d/%d: %s\n", i + 1, n_files, sorted_paths[i]);
+
+        fs->files[i] = zarr_open(sorted_paths[i]);
+        if (!fs->files[i]) {
+            fprintf(stderr, "Failed to open zarr store: %s\n", sorted_paths[i]);
+            /* Cleanup */
+            for (int j = 0; j < i; j++) {
+                zarr_close(fs->files[j]);
+            }
+            for (int j = 0; j < n_files; j++) {
+                free(sorted_paths[j]);
+            }
+            free(sorted_paths);
+            free(fs->files);
+            free(fs->time_offsets);
+            free(fs);
+            return NULL;
+        }
+
+        /* Get time dimension size from this store */
+        ZarrStore *store = (ZarrStore *)fs->files[i]->zarr_data;
+        size_t time_size = 0;
+
+        if (store->use_consolidated && store->metadata) {
+            cJSON *metadata = cJSON_GetObjectItem(store->metadata, "metadata");
+            if (metadata) {
+                /* Look for time array */
+                cJSON *time_zarray = cJSON_GetObjectItem(metadata, "time/.zarray");
+                if (time_zarray) {
+                    cJSON *shape = cJSON_GetObjectItem(time_zarray, "shape");
+                    if (shape && cJSON_IsArray(shape) && cJSON_GetArraySize(shape) > 0) {
+                        time_size = (size_t)cJSON_GetArrayItem(shape, 0)->valuedouble;
+                    }
+                }
+            }
+        }
+
+        if (time_size == 0) {
+            time_size = 1;  /* Assume single time step */
+        }
+
+        fs->time_offsets[i + 1] = fs->time_offsets[i] + time_size;
+        printf("  Zarr file %d: %zu time steps (offset %zu)\n", i, time_size, fs->time_offsets[i]);
+    }
+
+    fs->n_files = n_files;
+    fs->total_times = fs->time_offsets[n_files];
+    fs->base_filename = strdup(sorted_paths[0]);
+
+    printf("Total virtual time steps: %zu across %d zarr files\n", fs->total_times, n_files);
+
+    /* Cleanup sorted paths */
+    for (int i = 0; i < n_files; i++) {
+        free(sorted_paths[i]);
+    }
+    free(sorted_paths);
+
+    return fs;
+}
+
+USFileSet *zarr_open_glob(const char *pattern) {
+    if (!pattern) return NULL;
+
+    glob_t glob_result;
+    int ret = glob(pattern, GLOB_TILDE | GLOB_NOSORT, NULL, &glob_result);
+
+    if (ret != 0) {
+        if (ret == GLOB_NOMATCH) {
+            fprintf(stderr, "No zarr stores match pattern: %s\n", pattern);
+        } else {
+            fprintf(stderr, "Glob error for pattern: %s\n", pattern);
+        }
+        return NULL;
+    }
+
+    if (glob_result.gl_pathc == 0) {
+        fprintf(stderr, "No zarr stores match pattern: %s\n", pattern);
+        globfree(&glob_result);
+        return NULL;
+    }
+
+    printf("Zarr pattern '%s' matched %zu files\n", pattern, glob_result.gl_pathc);
+
+    USFileSet *fs = zarr_open_fileset((const char **)glob_result.gl_pathv,
+                                       (int)glob_result.gl_pathc);
+    globfree(&glob_result);
+
+    return fs;
+}
+
+/* Map virtual time index to file index and local time index */
+static int zarr_fileset_map_time(USFileSet *fs, size_t virtual_time,
+                                  int *file_idx_out, size_t *local_time_out) {
+    if (!fs || !file_idx_out || !local_time_out) return -1;
+    if (virtual_time >= fs->total_times) return -1;
+
+    /* Binary search for the file containing this time step */
+    int lo = 0, hi = fs->n_files - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (fs->time_offsets[mid] <= virtual_time) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    *file_idx_out = lo;
+    *local_time_out = virtual_time - fs->time_offsets[lo];
+    return 0;
+}
+
+int zarr_read_slice_fileset(USFileSet *fs, USVar *var,
+                            size_t virtual_time, size_t depth_idx, float *data) {
+    if (!fs || !var || !data) return -1;
+
+    int file_idx;
+    size_t local_time;
+    if (zarr_fileset_map_time(fs, virtual_time, &file_idx, &local_time) != 0) {
+        fprintf(stderr, "Invalid virtual time index: %zu\n", virtual_time);
+        return -1;
+    }
+
+    /* Get the file */
+    USFile *file = fs->files[file_idx];
+    ZarrStore *store = (ZarrStore *)file->zarr_data;
+
+    /* For files other than the first, we need to find the variable and build ZarrArray */
+    ZarrArray *za = NULL;
+    int need_free_za = 0;
+
+    if (file_idx == 0) {
+        /* Use the existing ZarrArray from var */
+        za = (ZarrArray *)var->zarr_data;
+    } else {
+        /* Build ZarrArray for this file's variable */
+        if (store->use_consolidated && store->metadata) {
+            cJSON *metadata = cJSON_GetObjectItem(store->metadata, "metadata");
+            if (metadata) {
+                char zarray_key[MAX_NAME_LEN + 16];
+                char zattrs_key[MAX_NAME_LEN + 16];
+                snprintf(zarray_key, sizeof(zarray_key), "%s/.zarray", var->name);
+                snprintf(zattrs_key, sizeof(zattrs_key), "%s/.zattrs", var->name);
+
+                cJSON *zarray = cJSON_GetObjectItem(metadata, zarray_key);
+                cJSON *zattrs = cJSON_GetObjectItem(metadata, zattrs_key);
+
+                if (zarray) {
+                    char array_path[PATH_MAX];
+                    snprintf(array_path, sizeof(array_path), "%s/%s", store->base_path, var->name);
+                    za = parse_zarray(array_path, zarray, zattrs);
+                    need_free_za = 1;
+                }
+            }
+        }
+    }
+
+    if (!za) {
+        fprintf(stderr, "Could not find variable '%s' in zarr file %d\n", var->name, file_idx);
+        return -1;
+    }
+
+    /* Now read the slice using the ZarrArray */
+    size_t n_points = var->mesh->n_points;
+
+    /* Determine chunk indices */
+    size_t time_chunk = 0;
+    size_t local_time_in_chunk = local_time;
+
+    if (var->time_dim_id >= 0) {
+        time_chunk = local_time / za->chunks[var->time_dim_id];
+        local_time_in_chunk = local_time % za->chunks[var->time_dim_id];
+    }
+
+    /* Build chunk filename */
+    char chunk_path[PATH_MAX];
+    char chunk_key[256] = "";
+
+    for (int d = 0; d < za->ndim; d++) {
+        char part[32];
+        size_t chunk_idx;
+
+        if (d == var->time_dim_id) {
+            chunk_idx = time_chunk;
+        } else if (d == var->depth_dim_id) {
+            chunk_idx = depth_idx / za->chunks[d];
+        } else {
+            chunk_idx = 0;
+        }
+
+        if (d > 0) strcat(chunk_key, ".");
+        snprintf(part, sizeof(part), "%zu", chunk_idx);
+        strcat(chunk_key, part);
+    }
+
+    snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
+
+    /* Calculate expected uncompressed size */
+    size_t chunk_elements = 1;
+    for (int d = 0; d < za->ndim; d++) {
+        chunk_elements *= za->chunks[d];
+    }
+    size_t expected_size = chunk_elements * za->dtype_size;
+
+    /* Read chunk */
+    void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
+    if (!chunk_data) {
+        if (need_free_za) free_zarray(za);
+        return -1;
+    }
+
+    /* Extract the slice we need */
+    size_t slice_offset = 0;
+    if (var->time_dim_id >= 0 && var->time_dim_id == 0) {
+        slice_offset = local_time_in_chunk * za->chunks[1];
+    }
+
+    /* Copy and convert to float */
+    if (za->dtype == 'f' && za->dtype_size == 4) {
+        memcpy(data, (char *)chunk_data + slice_offset * sizeof(float), n_points * sizeof(float));
+    } else if (za->dtype == 'd') {
+        double *src = (double *)((char *)chunk_data + slice_offset * sizeof(double));
+        for (size_t i = 0; i < n_points; i++) {
+            data[i] = (float)src[i];
+        }
+    } else if (za->dtype == 'i' && za->dtype_size == 8) {
+        int64_t *src = (int64_t *)((char *)chunk_data + slice_offset * sizeof(int64_t));
+        for (size_t i = 0; i < n_points; i++) {
+            data[i] = (float)src[i];
+        }
+    }
+
+    free(chunk_data);
+    if (need_free_za) free_zarray(za);
+
+    return 0;
+}
+
+USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out) {
+    if (!fs || !var || !n_dims_out || fs->n_files == 0) return NULL;
+
+    /* Get base dimension info from the variable */
+    USDimInfo *dims = zarr_get_dim_info(var, n_dims_out);
+    if (!dims) return NULL;
+
+    /* Update time dimension with virtual total and concatenated values */
+    for (int i = 0; i < *n_dims_out; i++) {
+        if (var->time_dim_id >= 0 &&
+            strcmp(dims[i].name, var->dim_names[var->time_dim_id]) == 0) {
+            /* This is the time dimension - update with virtual info */
+            double *old_values = dims[i].values;
+
+            dims[i].size = fs->total_times;
+            dims[i].is_scannable = (fs->total_times > 1);
+
+            /* Allocate space for all time values */
+            dims[i].values = malloc(fs->total_times * sizeof(double));
+            if (dims[i].values) {
+                size_t offset = 0;
+
+                /* Collect time values from all files */
+                for (int f = 0; f < fs->n_files; f++) {
+                    ZarrStore *store = (ZarrStore *)fs->files[f]->zarr_data;
+                    size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
+
+                    /* Try to read time coordinate from this file */
+                    int got_values = 0;
+                    if (store->use_consolidated && store->metadata) {
+                        cJSON *metadata = cJSON_GetObjectItem(store->metadata, "metadata");
+                        if (metadata) {
+                            cJSON *time_zarray = cJSON_GetObjectItem(metadata, "time/.zarray");
+                            cJSON *time_zattrs = cJSON_GetObjectItem(metadata, "time/.zattrs");
+                            if (time_zarray) {
+                                char time_path[PATH_MAX];
+                                snprintf(time_path, sizeof(time_path), "%s/time", store->base_path);
+                                ZarrArray *time_za = parse_zarray(time_path, time_zarray, time_zattrs);
+                                if (time_za) {
+                                    char chunk_path[PATH_MAX];
+                                    snprintf(chunk_path, sizeof(chunk_path), "%s/0", time_path);
+                                    size_t coord_size = file_times * time_za->dtype_size;
+                                    void *coord_data = zarr_read_chunk(chunk_path, time_za, coord_size);
+                                    if (coord_data) {
+                                        if (time_za->dtype == 'i' && time_za->dtype_size == 8) {
+                                            int64_t *src = (int64_t *)coord_data;
+                                            for (size_t t = 0; t < file_times; t++) {
+                                                dims[i].values[offset + t] = (double)src[t];
+                                            }
+                                            got_values = 1;
+                                        } else if (time_za->dtype == 'd') {
+                                            memcpy(&dims[i].values[offset], coord_data, file_times * sizeof(double));
+                                            got_values = 1;
+                                        }
+                                        free(coord_data);
+                                    }
+                                    free_zarray(time_za);
+                                }
+                            }
+                        }
+                    }
+
+                    if (!got_values) {
+                        /* Fall back to indices */
+                        for (size_t t = 0; t < file_times; t++) {
+                            dims[i].values[offset + t] = (double)(offset + t);
+                        }
+                    }
+
+                    offset += file_times;
+                }
+
+                dims[i].min_val = dims[i].values[0];
+                dims[i].max_val = dims[i].values[fs->total_times - 1];
+            }
+
+            free(old_values);
+            break;
+        }
+    }
+
+    return dims;
+}
+
+void zarr_close_fileset(USFileSet *fs) {
+    if (!fs) return;
+
+    for (int i = 0; i < fs->n_files; i++) {
+        if (fs->files[i]) {
+            zarr_close(fs->files[i]);
+        }
+    }
+
+    free(fs->files);
+    free(fs->time_offsets);
+    free(fs->base_filename);
+    free(fs);
+}
+
 #endif /* HAVE_ZARR */

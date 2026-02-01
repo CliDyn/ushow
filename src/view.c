@@ -164,7 +164,13 @@ int view_update(USView *view) {
     /* Read data slice - dispatch based on file type */
     int read_result;
 #ifdef HAVE_ZARR
-    if (view->variable->file && view->variable->file->file_type == FILE_TYPE_ZARR) {
+    if (view->fileset && view->fileset->files[0]->file_type == FILE_TYPE_ZARR) {
+        /* Zarr multi-file */
+        read_result = zarr_read_slice_fileset(view->fileset, view->variable,
+                                              view->time_index, view->depth_index,
+                                              view->raw_data);
+    } else if (view->variable->file && view->variable->file->file_type == FILE_TYPE_ZARR) {
+        /* Single zarr file */
         read_result = zarr_read_slice(view->variable, view->time_index,
                                       view->depth_index, view->raw_data);
     } else
