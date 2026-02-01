@@ -2,6 +2,8 @@
  * file_netcdf.c - NetCDF file reading implementation
  */
 
+#define _GNU_SOURCE
+
 #include "file_netcdf.h"
 #include <netcdf.h>
 #include <stdlib.h>

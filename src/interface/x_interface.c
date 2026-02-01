@@ -20,6 +20,7 @@
 #include <X11/Xaw/Viewport.h>
 #include <X11/Xaw/Simple.h>
 #include <X11/Xutil.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

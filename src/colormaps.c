@@ -193,10 +193,10 @@ void colormap_apply(const USColormap *cmap, const float *data,
             /* Check for fill value or NaN */
             if (fabsf(v) > 1e10f || v != v ||
                 fabsf(v - fill_value) < 1e-6f * fabsf(fill_value)) {
-                /* Missing data: draw as dark gray */
-                pixels[dst_idx * 3 + 0] = 30;
-                pixels[dst_idx * 3 + 1] = 30;
-                pixels[dst_idx * 3 + 2] = 30;
+                /* Missing data: draw as white */
+                pixels[dst_idx * 3 + 0] = 255;
+                pixels[dst_idx * 3 + 1] = 255;
+                pixels[dst_idx * 3 + 2] = 255;
             } else {
                 /* Normalize to [0, 1] */
                 float t = (v - min_val) / range;
@@ -236,8 +236,8 @@ void colormap_apply_scaled(const USColormap *cmap, const float *data,
             /* Check for fill value or NaN */
             if (fabsf(v) > 1e10f || v != v ||
                 fabsf(v - fill_value) < 1e-6f * fabsf(fill_value)) {
-                /* Missing data: draw as dark gray */
-                r = g = b = 30;
+                /* Missing data: draw as white */
+                r = g = b = 255;
             } else {
                 /* Normalize to [0, 1] */
                 float t = (v - min_val) / range;
