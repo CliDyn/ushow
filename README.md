@@ -8,7 +8,7 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 - **Fast visualization**: KDTree-based nearest-neighbor interpolation to regular grid
 - **X11/Xaw interface**: Works over SSH with X forwarding
 - **Animation support**: Step through time dimensions
-- **Multiple colormaps**: jet, viridis, hot, grayscale
+- **Multiple colormaps**: viridis, hot, grayscale, plus the full cmocean set
 
 ## Building
 
@@ -120,6 +120,8 @@ Automatically identifies dimension roles:
 ## Acknowledgments
 
 ushow’s interface design is inspired by **ncview**.
+
+cmocean colormap tables are sourced from the cmocean-ncmaps project (https://gitlab.dkrz.de/m300575/cmocean-ncmaps). Thanks to Lukas Kluft for providing the ncmaps data.
 
 ## License
 

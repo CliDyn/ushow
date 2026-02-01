@@ -178,6 +178,15 @@ static void on_colormap_change(void) {
     }
 }
 
+static void on_colormap_back(void) {
+    colormap_prev();
+    USColormap *cmap = colormap_get_current();
+    if (cmap) {
+        x_update_colormap_label(cmap->name);
+        update_display();
+    }
+}
+
 static void on_mouse_motion(int px, int py) {
     if (!view || !view->regrid || !view->regridded_data) return;
 
@@ -720,6 +729,7 @@ int main(int argc, char *argv[]) {
     x_set_depth_callback(on_depth_change);
     x_set_animation_callback(on_animation);
     x_set_colormap_callback(on_colormap_change);
+    x_set_colormap_back_callback(on_colormap_back);
     x_set_mouse_callback(on_mouse_motion);
     x_set_range_callback(on_range_adjust);
     x_set_zoom_callback(on_zoom);
@@ -740,7 +750,7 @@ int main(int argc, char *argv[]) {
 
     printf("\nReady. Use variable buttons to select data.\n");
     printf("Controls: < Back | || Pause | Fwd >\n");
-    printf("Click 'Colormap' to cycle through colormaps.\n\n");
+    printf("Click 'Colormap' to cycle through colormaps (right-click to go back).\n\n");
 
     /* Enter main loop */
     x_main_loop();

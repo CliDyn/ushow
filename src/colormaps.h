@@ -23,6 +23,11 @@ USColormap *colormap_get_current(void);
 void colormap_next(void);
 
 /*
+ * Cycle to previous colormap.
+ */
+void colormap_prev(void);
+
+/*
  * Get colormap by name.
  */
 USColormap *colormap_get_by_name(const char *name);

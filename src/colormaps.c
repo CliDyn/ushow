@@ -3,59 +3,12 @@
  */
 
 #include "colormaps.h"
+#include "cmocean_colormaps.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
 #define N_COLORS 256
-
-/* Jet colormap definition */
-static void create_jet_colormap(USColormap *cmap) {
-    strcpy(cmap->name, "jet");
-    cmap->n_colors = N_COLORS;
-    cmap->colors = malloc(N_COLORS * sizeof(USColor));
-
-    for (int i = 0; i < N_COLORS; i++) {
-        float t = (float)i / (N_COLORS - 1);  /* 0 to 1 */
-
-        float r, g, b;
-
-        /* Jet colormap formula */
-        if (t < 0.125f) {
-            r = 0.0f;
-            g = 0.0f;
-            b = 0.5f + t * 4.0f;
-        } else if (t < 0.375f) {
-            r = 0.0f;
-            g = (t - 0.125f) * 4.0f;
-            b = 1.0f;
-        } else if (t < 0.625f) {
-            r = (t - 0.375f) * 4.0f;
-            g = 1.0f;
-            b = 1.0f - (t - 0.375f) * 4.0f;
-        } else if (t < 0.875f) {
-            r = 1.0f;
-            g = 1.0f - (t - 0.625f) * 4.0f;
-            b = 0.0f;
-        } else {
-            r = 1.0f - (t - 0.875f) * 4.0f;
-            g = 0.0f;
-            b = 0.0f;
-        }
-
-        /* Clamp values */
-        if (r < 0.0f) r = 0.0f;
-        if (r > 1.0f) r = 1.0f;
-        if (g < 0.0f) g = 0.0f;
-        if (g > 1.0f) g = 1.0f;
-        if (b < 0.0f) b = 0.0f;
-        if (b > 1.0f) b = 1.0f;
-
-        cmap->colors[i].r = (unsigned char)(r * 255.0f);
-        cmap->colors[i].g = (unsigned char)(g * 255.0f);
-        cmap->colors[i].b = (unsigned char)(b * 255.0f);
-    }
-}
 
 /* Viridis colormap definition (approximation) */
 static void create_viridis_colormap(USColormap *cmap) {
@@ -84,6 +37,19 @@ static void create_viridis_colormap(USColormap *cmap) {
         cmap->colors[i].r = (unsigned char)(r * 255.0f);
         cmap->colors[i].g = (unsigned char)(g * 255.0f);
         cmap->colors[i].b = (unsigned char)(b * 255.0f);
+    }
+}
+
+static void create_colormap_from_rgb256(USColormap *cmap, const char *name,
+                                        const unsigned char (*data)[3]) {
+    strcpy(cmap->name, name);
+    cmap->n_colors = N_COLORS;
+    cmap->colors = malloc(N_COLORS * sizeof(USColor));
+
+    for (int i = 0; i < N_COLORS; i++) {
+        cmap->colors[i].r = data[i][0];
+        cmap->colors[i].g = data[i][1];
+        cmap->colors[i].b = data[i][2];
     }
 }
 
@@ -131,17 +97,30 @@ static void create_hot_colormap(USColormap *cmap) {
 }
 
 /* Global colormap storage */
-#define MAX_COLORMAPS 16
+#define MAX_COLORMAPS 32
 static USColormap colormaps[MAX_COLORMAPS];
 static int n_colormaps = 0;
 static int current_colormap = 0;
 
 void colormaps_init(void) {
     /* Create built-in colormaps */
-    create_jet_colormap(&colormaps[n_colormaps++]);
     create_viridis_colormap(&colormaps[n_colormaps++]);
     create_hot_colormap(&colormaps[n_colormaps++]);
     create_grayscale_colormap(&colormaps[n_colormaps++]);
+
+    for (int i = 0; i < CMOCEAN_COLORMAP_COUNT; i++) {
+        create_colormap_from_rgb256(&colormaps[n_colormaps++],
+                                    cmocean_colormaps[i].name,
+                                    cmocean_colormaps[i].data);
+    }
+
+    /* Default to viridis if available */
+    for (int i = 0; i < n_colormaps; i++) {
+        if (strcmp(colormaps[i].name, "viridis") == 0) {
+            current_colormap = i;
+            break;
+        }
+    }
 }
 
 USColormap *colormap_get_current(void) {
@@ -152,6 +131,12 @@ USColormap *colormap_get_current(void) {
 void colormap_next(void) {
     if (n_colormaps > 0) {
         current_colormap = (current_colormap + 1) % n_colormaps;
+    }
+}
+
+void colormap_prev(void) {
+    if (n_colormaps > 0) {
+        current_colormap = (current_colormap + n_colormaps - 1) % n_colormaps;
     }
 }
 

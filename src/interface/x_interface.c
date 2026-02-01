@@ -109,6 +109,7 @@ static TimeChangeCallback time_change_cb = NULL;
 static DepthChangeCallback depth_change_cb = NULL;
 static AnimationCallback animation_cb = NULL;
 static ColormapCallback colormap_cb = NULL;
+static ColormapCallback colormap_back_cb = NULL;
 
 typedef void (*MouseMotionCallback)(int x, int y);
 static MouseMotionCallback mouse_motion_cb = NULL;
@@ -170,6 +171,11 @@ static void ffwd_callback(Widget w, XtPointer client_data, XtPointer call_data) 
 static void cmap_callback(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)client_data; (void)call_data;
     if (colormap_cb) colormap_cb();
+}
+
+static void cmap_back_callback(Widget w, XEvent *event, String *params, Cardinal *num_params) {
+    (void)w; (void)event; (void)params; (void)num_params;
+    if (colormap_back_cb) colormap_back_cb();
 }
 
 static void min_down_callback(Widget w, XtPointer client_data, XtPointer call_data) {
@@ -329,6 +335,7 @@ static void diminfo_cur_backward_action_proc(Widget w, XEvent *event, String *pa
 
 static XtActionsRec actions[] = {
     {"diminfo_cur_backward", diminfo_cur_backward_action_proc},
+    {"cmap_back", cmap_back_callback},
 };
 
 int x_init(int *argc, char **argv, const char **var_names, int n_vars,
@@ -477,6 +484,8 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         NULL
     );
     XtAddCallback(cmap_button, XtNcallback, cmap_callback, NULL);
+    XtAugmentTranslations(cmap_button,
+        XtParseTranslationTable("<Btn3Down>,<Btn3Up>: cmap_back()"));
 
     btn = XtVaCreateManagedWidget("Min-", commandWidgetClass, optionbox,
         XtNwidth, BUTTON_WIDTH, NULL);
@@ -658,6 +667,7 @@ void x_set_time_callback(TimeChangeCallback cb) { time_change_cb = cb; }
 void x_set_depth_callback(DepthChangeCallback cb) { depth_change_cb = cb; }
 void x_set_animation_callback(AnimationCallback cb) { animation_cb = cb; }
 void x_set_colormap_callback(ColormapCallback cb) { colormap_cb = cb; }
+void x_set_colormap_back_callback(ColormapCallback cb) { colormap_back_cb = cb; }
 void x_set_mouse_callback(void (*cb)(int, int)) { mouse_motion_cb = cb; }
 void x_set_range_callback(void (*cb)(int)) { range_adjust_cb = cb; }
 void x_set_zoom_callback(void (*cb)(int)) { zoom_cb = cb; }
