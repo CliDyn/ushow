@@ -9,6 +9,14 @@
 #include <strings.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <limits.h>
+
+#ifdef HAVE_ZARR
+#include "cJSON/cJSON.h"
+#include <lz4.h>
+#include <blosc.h>
+#endif
 
 /* Common coordinate variable names to search for */
 static const char *LON_NAMES[] = {
@@ -297,6 +305,232 @@ error:
     if (mesh_filename && mesh_filename[0]) nc_close(mesh_ncid);
     return NULL;
 }
+
+#ifdef HAVE_ZARR
+
+/* Helper to read file contents */
+static char *mesh_read_file(const char *path, size_t *size_out) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    char *data = malloc(size + 1);
+    if (!data) {
+        fclose(fp);
+        return NULL;
+    }
+
+    size_t read = fread(data, 1, size, fp);
+    fclose(fp);
+
+    if ((long)read != size) {
+        free(data);
+        return NULL;
+    }
+
+    data[size] = '\0';
+    if (size_out) *size_out = size;
+    return data;
+}
+
+/* Helper to read JSON file */
+static cJSON *mesh_read_json(const char *path) {
+    size_t size;
+    char *contents = mesh_read_file(path, &size);
+    if (!contents) return NULL;
+
+    cJSON *json = cJSON_Parse(contents);
+    free(contents);
+    return json;
+}
+
+/* Read and decompress a zarr coordinate array */
+static double *read_zarr_coord(const char *base_path, const char *coord_name,
+                                size_t *n_points_out) {
+    char coord_path[PATH_MAX];
+    char zarray_path[PATH_MAX];
+
+    snprintf(coord_path, sizeof(coord_path), "%s/%s", base_path, coord_name);
+    snprintf(zarray_path, sizeof(zarray_path), "%s/.zarray", coord_path);
+
+    /* Read .zarray metadata */
+    cJSON *zarray = mesh_read_json(zarray_path);
+    if (!zarray) {
+        fprintf(stderr, "Failed to read %s\n", zarray_path);
+        return NULL;
+    }
+
+    /* Get shape */
+    cJSON *shape = cJSON_GetObjectItem(zarray, "shape");
+    if (!shape || !cJSON_IsArray(shape) || cJSON_GetArraySize(shape) < 1) {
+        cJSON_Delete(zarray);
+        return NULL;
+    }
+    size_t n_points = (size_t)cJSON_GetArrayItem(shape, 0)->valuedouble;
+    *n_points_out = n_points;
+
+    /* Get dtype */
+    cJSON *dtype_obj = cJSON_GetObjectItem(zarray, "dtype");
+    const char *dtype_str = dtype_obj ? dtype_obj->valuestring : "<f8";
+    int dtype_size = 8;  /* Default to float64 */
+    char dtype = 'd';
+    if (dtype_str && strlen(dtype_str) >= 3) {
+        dtype = dtype_str[1];
+        dtype_size = atoi(&dtype_str[2]);
+    }
+
+    /* Get compressor */
+    cJSON *comp = cJSON_GetObjectItem(zarray, "compressor");
+    char *compressor_id = NULL;
+    if (comp && !cJSON_IsNull(comp)) {
+        cJSON *comp_id = cJSON_GetObjectItem(comp, "id");
+        if (comp_id && cJSON_IsString(comp_id)) {
+            compressor_id = comp_id->valuestring;
+        }
+    }
+
+    /* Read chunk file */
+    char chunk_path[PATH_MAX];
+    snprintf(chunk_path, sizeof(chunk_path), "%s/0", coord_path);
+
+    size_t comp_size;
+    void *compressed = mesh_read_file(chunk_path, &comp_size);
+    if (!compressed) {
+        fprintf(stderr, "Failed to read chunk: %s\n", chunk_path);
+        cJSON_Delete(zarray);
+        return NULL;
+    }
+
+    /* Decompress */
+    size_t expected_size = n_points * dtype_size;
+    void *raw_data = NULL;
+
+    if (!compressor_id) {
+        /* No compression */
+        raw_data = compressed;
+    } else if (strcmp(compressor_id, "lz4") == 0) {
+        raw_data = malloc(expected_size);
+        if (raw_data) {
+            uint32_t uncomp_size = *(uint32_t *)compressed;
+            int result = LZ4_decompress_safe((const char *)compressed + 4,
+                                             raw_data,
+                                             (int)(comp_size - 4),
+                                             (int)uncomp_size);
+            if (result < 0) {
+                fprintf(stderr, "LZ4 decompression failed for %s\n", coord_name);
+                free(raw_data);
+                raw_data = NULL;
+            }
+        }
+        free(compressed);
+    } else if (strcmp(compressor_id, "blosc") == 0) {
+        raw_data = malloc(expected_size);
+        if (raw_data) {
+            int result = blosc_decompress(compressed, raw_data, expected_size);
+            if (result < 0) {
+                fprintf(stderr, "Blosc decompression failed for %s\n", coord_name);
+                free(raw_data);
+                raw_data = NULL;
+            }
+        }
+        free(compressed);
+    } else {
+        fprintf(stderr, "Unknown compressor: %s\n", compressor_id);
+        free(compressed);
+    }
+
+    cJSON_Delete(zarray);
+
+    if (!raw_data) return NULL;
+
+    /* Convert to double array */
+    double *result = malloc(n_points * sizeof(double));
+    if (!result) {
+        free(raw_data);
+        return NULL;
+    }
+
+    if (dtype == 'f' && dtype_size == 8) {
+        memcpy(result, raw_data, n_points * sizeof(double));
+    } else if (dtype == 'f' && dtype_size == 4) {
+        float *src = (float *)raw_data;
+        for (size_t i = 0; i < n_points; i++) {
+            result[i] = (double)src[i];
+        }
+    } else {
+        fprintf(stderr, "Unsupported coordinate dtype: %c%d\n", dtype, dtype_size);
+        free(result);
+        free(raw_data);
+        return NULL;
+    }
+
+    free(raw_data);
+    return result;
+}
+
+USMesh *mesh_create_from_zarr(USFile *file) {
+    if (!file || !file->zarr_data) return NULL;
+
+    /* Get base path from file */
+    /* USFile->zarr_data is ZarrStore* which has base_path as first field */
+    /* Since we can't include file_zarr.h internal types, read it directly */
+    char *base_path = *(char **)file->zarr_data;  /* First field is base_path */
+
+    printf("Loading coordinates from zarr store: %s\n", base_path);
+
+    /* Try to read latitude and longitude */
+    size_t lat_points = 0, lon_points = 0;
+
+    /* Try different coordinate names */
+    double *lat = read_zarr_coord(base_path, "latitude", &lat_points);
+    if (!lat) {
+        lat = read_zarr_coord(base_path, "lat", &lat_points);
+    }
+
+    double *lon = read_zarr_coord(base_path, "longitude", &lon_points);
+    if (!lon) {
+        lon = read_zarr_coord(base_path, "lon", &lon_points);
+    }
+
+    if (!lat || !lon) {
+        fprintf(stderr, "Could not find latitude/longitude coordinates in zarr store\n");
+        free(lat);
+        free(lon);
+        return NULL;
+    }
+
+    if (lat_points != lon_points) {
+        fprintf(stderr, "Coordinate array size mismatch: lat=%zu, lon=%zu\n",
+                lat_points, lon_points);
+        free(lat);
+        free(lon);
+        return NULL;
+    }
+
+    size_t n_points = lat_points;
+    printf("Loaded %zu coordinate points from zarr store\n", n_points);
+
+    /* Normalize longitude to [-180, 180] */
+    for (size_t i = 0; i < n_points; i++) {
+        while (lon[i] > 180.0) lon[i] -= 360.0;
+        while (lon[i] < -180.0) lon[i] += 360.0;
+    }
+
+    /* Create mesh - zarr data is always unstructured (1D coordinate arrays) */
+    USMesh *mesh = mesh_create(lon, lat, n_points, COORD_TYPE_1D_UNSTRUCTURED);
+    if (!mesh) {
+        free(lon);
+        free(lat);
+        return NULL;
+    }
+
+    return mesh;
+}
+
+#endif /* HAVE_ZARR */
 
 void mesh_free(USMesh *mesh) {
     if (!mesh) return;

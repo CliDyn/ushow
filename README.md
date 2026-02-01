@@ -24,11 +24,17 @@ Install dependencies:
 brew install netcdf
 ```
 
+For optional Zarr support:
+```bash
+brew install c-blosc lz4
+```
+
 Install [XQuartz](https://www.xquartz.org/) for X11 support. After installation, the X11 libraries will be in `/opt/X11`.
 
 Build:
 ```bash
-make
+make                  # Without zarr support
+make WITH_ZARR=1      # With zarr support
 ```
 
 The Makefile auto-detects XQuartz at `/opt/X11`.
@@ -86,7 +92,7 @@ No libraries should show as "not found".
 ## Usage
 
 ```bash
-./ushow [options] <data_file.nc>
+./ushow [options] <data_file.nc|data.zarr> [file2 ...]
 
 Options:
   -m, --mesh <file>      Mesh file with coordinates (for unstructured data)
@@ -112,6 +118,18 @@ Higher resolution display:
 ```bash
 ./ushow data.nc -r 0.5  # 0.5 degree grid (720x360)
 ```
+
+Multi-file time concatenation (NetCDF):
+```bash
+./ushow "temp.fesom.*.nc" -m mesh.nc   # Glob pattern
+./ushow file1.nc file2.nc -m mesh.nc   # Explicit files
+```
+
+Zarr store (requires `make WITH_ZARR=1`):
+```bash
+./ushow data.zarr                      # Single zarr store
+./ushow "data_*.zarr"                  # Multiple zarr stores (time concat)
+```
 ## Testing
 
 Run the test suite:
@@ -130,6 +148,7 @@ The test suite includes:
 - **test_regrid**: Interpolation to regular grids
 - **test_colormaps**: Color mapping functions
 - **test_file_netcdf**: NetCDF file I/O
+- **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_integration**: End-to-end workflow tests
 
 
@@ -156,7 +175,10 @@ The test suite includes:
 ## Supported Data Formats
 
 - **NetCDF**: Full support (NetCDF-3 and NetCDF-4)
-- **Zarr**: Planned for future
+- **Zarr**: v2 format with LZ4/Blosc compression (requires `make WITH_ZARR=1`)
+  - Supports unstructured data (ICON, etc.)
+  - Reads coordinates from embedded latitude/longitude arrays
+  - Multi-file time concatenation supported
 
 ## Coordinate Detection
 
