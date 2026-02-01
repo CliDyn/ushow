@@ -1,4 +1,5 @@
 # ushow - Unstructured Data Viewer
+![usow_example](https://github.com/user-attachments/assets/125165e5-b3e1-4cb4-a728-5f39cf7838b3)
 
 A fast, ncview‑inspired visualization tool for structured and unstructured geoscientific data.
 
