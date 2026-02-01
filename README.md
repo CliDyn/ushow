@@ -46,9 +46,15 @@ Install dependencies:
 sudo apt-get install libnetcdf-dev libx11-dev libxt-dev libxaw7-dev libxmu-dev libxext-dev
 ```
 
+For optional Zarr support:
+```bash
+sudo apt-get install libblosc-dev liblz4-dev
+```
+
 Build:
 ```bash
-make
+make                  # Without zarr support
+make WITH_ZARR=1      # With zarr support
 ```
 
 ### DKRZ Levante
@@ -59,7 +65,8 @@ On Levante, the Makefile automatically uses the DKRZ spack-installed libraries:
 
 No modules need to be loaded. Simply run:
 ```bash
-make
+make                  # Without zarr support
+make WITH_ZARR=1      # With zarr support (uses system blosc/lz4)
 ```
 
 The binary will have the library paths embedded (via rpath), so it runs without setting `LD_LIBRARY_PATH`.
@@ -129,6 +136,13 @@ Zarr store (requires `make WITH_ZARR=1`):
 ```bash
 ./ushow data.zarr                      # Single zarr store
 ./ushow "data_*.zarr"                  # Multiple zarr stores (time concat)
+./ushow data.zarr -r 0.25              # Higher resolution display
+```
+
+Zarr store with consolidated metadata (faster loading):
+```bash
+# Zarr stores with .zmetadata file are loaded more efficiently
+./ushow output.zarr                    # Auto-detects consolidated metadata
 ```
 ## Testing
 
@@ -175,10 +189,14 @@ The test suite includes:
 ## Supported Data Formats
 
 - **NetCDF**: Full support (NetCDF-3 and NetCDF-4)
-- **Zarr**: v2 format with LZ4/Blosc compression (requires `make WITH_ZARR=1`)
-  - Supports unstructured data (ICON, etc.)
+- **Zarr**: v2 format (requires `make WITH_ZARR=1`)
+  - Compression: LZ4, Blosc (with various inner codecs), or uncompressed
+  - Data types: Float32, Float64, Int64
+  - Supports consolidated metadata (.zmetadata) for faster loading
+  - Supports unstructured data (ICON, FESOM, etc.)
   - Reads coordinates from embedded latitude/longitude arrays
-  - Multi-file time concatenation supported
+  - Dimension metadata via `_ARRAY_DIMENSIONS` attribute (xarray convention)
+  - Multi-file time concatenation supported via glob patterns
 
 ## Coordinate Detection
 

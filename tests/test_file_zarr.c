@@ -581,6 +581,393 @@ TEST(zarr_usvar_structure) {
     return 1;
 }
 
+/* ---- Multi-file zarr tests ---- */
+
+/*
+ * Create multiple test zarr stores for fileset testing.
+ * Returns array of store paths (static buffer) or NULL on error.
+ * Creates stores with consolidated metadata (.zmetadata) for proper multi-file support.
+ */
+static const char **create_test_zarr_fileset(int n_files, int n_nodes, int times_per_file) {
+    static const char *paths[8];
+    static char path_storage[8][256];
+
+    if (n_files > 8) return NULL;
+
+    for (int f = 0; f < n_files; f++) {
+        snprintf(path_storage[f], sizeof(path_storage[f]),
+                 "/tmp/test_ushow_zarr_multi_%d_%d_%d.zarr",
+                 getpid(), zarr_test_counter++, f);
+
+        const char *store_path = path_storage[f];
+        paths[f] = store_path;
+
+        /* Remove any existing store */
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+        int ret = system(cmd);
+        (void)ret;
+
+        /* Create store directory */
+        if (mkdir(store_path, 0755) != 0) return NULL;
+
+        /* Write .zgroup */
+        if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return NULL;
+        if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return NULL;
+
+        /* Create latitude array */
+        char array_dir[512];
+        snprintf(array_dir, sizeof(array_dir), "%s/latitude", store_path);
+        if (mkdir(array_dir, 0755) != 0) return NULL;
+
+        char zarray_lat[1024];
+        snprintf(zarray_lat, sizeof(zarray_lat),
+                 "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+                 "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+                 "\"shape\":[%d],\"zarr_format\":2}",
+                 n_nodes, n_nodes);
+        if (write_zarr_file(store_path, "latitude/.zarray", zarray_lat) != 0) return NULL;
+        if (write_zarr_file(store_path, "latitude/.zattrs", "{\"units\":\"degrees_north\"}") != 0) return NULL;
+
+        double *lat_data = malloc(n_nodes * sizeof(double));
+        if (!lat_data) return NULL;
+        for (int i = 0; i < n_nodes; i++) {
+            lat_data[i] = -90.0 + 180.0 * i / (n_nodes - 1);
+        }
+        if (write_zarr_chunk(store_path, "latitude", "0", lat_data, n_nodes * sizeof(double)) != 0) {
+            free(lat_data);
+            return NULL;
+        }
+        free(lat_data);
+
+        /* Create longitude array */
+        snprintf(array_dir, sizeof(array_dir), "%s/longitude", store_path);
+        if (mkdir(array_dir, 0755) != 0) return NULL;
+
+        char zarray_lon[1024];
+        snprintf(zarray_lon, sizeof(zarray_lon),
+                 "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+                 "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+                 "\"shape\":[%d],\"zarr_format\":2}",
+                 n_nodes, n_nodes);
+        if (write_zarr_file(store_path, "longitude/.zarray", zarray_lon) != 0) return NULL;
+        if (write_zarr_file(store_path, "longitude/.zattrs", "{\"units\":\"degrees_east\"}") != 0) return NULL;
+
+        double *lon_data = malloc(n_nodes * sizeof(double));
+        if (!lon_data) return NULL;
+        for (int i = 0; i < n_nodes; i++) {
+            lon_data[i] = -180.0 + 360.0 * i / (n_nodes - 1);
+        }
+        if (write_zarr_chunk(store_path, "longitude", "0", lon_data, n_nodes * sizeof(double)) != 0) {
+            free(lon_data);
+            return NULL;
+        }
+        free(lon_data);
+
+        /* Create time array */
+        snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+        if (mkdir(array_dir, 0755) != 0) return NULL;
+
+        char zarray_time[1024];
+        snprintf(zarray_time, sizeof(zarray_time),
+                 "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+                 "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+                 "\"shape\":[%d],\"zarr_format\":2}",
+                 times_per_file, times_per_file);
+        if (write_zarr_file(store_path, "time/.zarray", zarray_time) != 0) return NULL;
+        if (write_zarr_file(store_path, "time/.zattrs", "{\"units\":\"days since 2000-01-01\"}") != 0) return NULL;
+
+        double *time_data = malloc(times_per_file * sizeof(double));
+        if (!time_data) return NULL;
+        for (int t = 0; t < times_per_file; t++) {
+            time_data[t] = f * times_per_file + t;  /* Continuous time across files */
+        }
+        if (write_zarr_chunk(store_path, "time", "0", time_data, times_per_file * sizeof(double)) != 0) {
+            free(time_data);
+            return NULL;
+        }
+        free(time_data);
+
+        /* Create data variable (temperature) */
+        snprintf(array_dir, sizeof(array_dir), "%s/temperature", store_path);
+        if (mkdir(array_dir, 0755) != 0) return NULL;
+
+        char zarray_data[1024];
+        snprintf(zarray_data, sizeof(zarray_data),
+                 "{\"chunks\":[1,%d],\"compressor\":null,\"dtype\":\"<f4\","
+                 "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\","
+                 "\"shape\":[%d,%d],\"zarr_format\":2}",
+                 n_nodes, times_per_file, n_nodes);
+        if (write_zarr_file(store_path, "temperature/.zarray", zarray_data) != 0) return NULL;
+
+        char zattrs_data[256];
+        snprintf(zattrs_data, sizeof(zattrs_data),
+                 "{\"units\":\"K\",\"long_name\":\"Temperature\","
+                 "\"_ARRAY_DIMENSIONS\":[\"time\",\"ncells\"]}");
+        if (write_zarr_file(store_path, "temperature/.zattrs", zattrs_data) != 0) return NULL;
+
+        /* Write data chunks */
+        float *data = malloc(n_nodes * sizeof(float));
+        if (!data) return NULL;
+
+        for (int t = 0; t < times_per_file; t++) {
+            int global_time = f * times_per_file + t;
+            for (int i = 0; i < n_nodes; i++) {
+                double lat = -90.0 + 180.0 * i / (n_nodes - 1);
+                data[i] = 273.0f + (float)lat * 0.5f + (float)global_time * 0.1f;
+            }
+            char chunk_name[32];
+            snprintf(chunk_name, sizeof(chunk_name), "%d.0", t);
+            if (write_zarr_chunk(store_path, "temperature", chunk_name, data, n_nodes * sizeof(float)) != 0) {
+                free(data);
+                return NULL;
+            }
+        }
+        free(data);
+
+        /* Create consolidated metadata (.zmetadata) for multi-file support */
+        char zmetadata[4096];
+        snprintf(zmetadata, sizeof(zmetadata),
+            "{"
+            "\"metadata\":{"
+                "\".zattrs\":{},"
+                "\".zgroup\":{\"zarr_format\":2},"
+                "\"latitude/.zarray\":%s,"
+                "\"latitude/.zattrs\":{\"units\":\"degrees_north\"},"
+                "\"longitude/.zarray\":{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+                    "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\",\"shape\":[%d],\"zarr_format\":2},"
+                "\"longitude/.zattrs\":{\"units\":\"degrees_east\"},"
+                "\"time/.zarray\":{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+                    "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\",\"shape\":[%d],\"zarr_format\":2},"
+                "\"time/.zattrs\":{\"units\":\"days since 2000-01-01\"},"
+                "\"temperature/.zarray\":{\"chunks\":[1,%d],\"compressor\":null,\"dtype\":\"<f4\","
+                    "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\",\"shape\":[%d,%d],\"zarr_format\":2},"
+                "\"temperature/.zattrs\":{\"units\":\"K\",\"long_name\":\"Temperature\","
+                    "\"_ARRAY_DIMENSIONS\":[\"time\",\"ncells\"]}"
+            "},"
+            "\"zarr_consolidated_format\":1"
+            "}",
+            zarray_lat, n_nodes, n_nodes,
+            times_per_file, times_per_file,
+            n_nodes, times_per_file, n_nodes);
+        if (write_zarr_file(store_path, ".zmetadata", zmetadata) != 0) return NULL;
+    }
+
+    return paths;
+}
+
+/* Cleanup multiple zarr stores */
+static void cleanup_test_zarr_fileset(const char **paths, int n_files) {
+    for (int i = 0; i < n_files; i++) {
+        if (paths[i]) {
+            cleanup_test_zarr(paths[i]);
+        }
+    }
+}
+
+/* Test zarr_open_fileset with NULL */
+TEST(zarr_open_fileset_null) {
+    USFileSet *fs = zarr_open_fileset(NULL, 0);
+    ASSERT_NULL(fs);
+    return 1;
+}
+
+/* Test zarr_open_fileset with valid stores */
+TEST(zarr_open_fileset_valid) {
+    const int n_files = 3;
+    const int n_nodes = 50;
+    const int times_per_file = 2;
+
+    const char **paths = create_test_zarr_fileset(n_files, n_nodes, times_per_file);
+    ASSERT_NOT_NULL(paths);
+
+    USFileSet *fs = zarr_open_fileset(paths, n_files);
+    ASSERT_NOT_NULL(fs);
+
+    ASSERT_EQ(fs->n_files, n_files);
+    ASSERT_EQ_SIZET(fs->total_times, n_files * times_per_file);
+
+    zarr_close_fileset(fs);
+    cleanup_test_zarr_fileset(paths, n_files);
+    return 1;
+}
+
+/* Test zarr_close_fileset with NULL */
+TEST(zarr_close_fileset_null) {
+    zarr_close_fileset(NULL);  /* Should not crash */
+    return 1;
+}
+
+/* Test zarr_read_slice_fileset */
+TEST(zarr_read_slice_fileset_basic) {
+    const int n_files = 2;
+    const int n_nodes = 50;
+    const int times_per_file = 3;
+
+    const char **paths = create_test_zarr_fileset(n_files, n_nodes, times_per_file);
+    ASSERT_NOT_NULL(paths);
+
+    USFileSet *fs = zarr_open_fileset(paths, n_files);
+    ASSERT_NOT_NULL(fs);
+
+    /* Create mesh from first file */
+    USMesh *mesh = mesh_create_from_zarr(fs->files[0]);
+    ASSERT_NOT_NULL(mesh);
+
+    /* Scan variables from first file */
+    USVar *vars = zarr_scan_variables(fs->files[0], mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find temperature variable */
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temperature") == 0) {
+            temp = v;
+            break;
+        }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    /* Read from first file (time=0) */
+    float *data0 = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data0);
+    int status = zarr_read_slice_fileset(fs, temp, 0, 0, data0);
+    ASSERT_EQ(status, 0);
+
+    /* Read from second file (time=3, which is in file 1) */
+    float *data3 = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data3);
+    status = zarr_read_slice_fileset(fs, temp, 3, 0, data3);
+    ASSERT_EQ(status, 0);
+
+    /* Data should differ between time steps */
+    int different = 0;
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        if (data0[i] != data3[i]) {
+            different = 1;
+            break;
+        }
+    }
+    ASSERT_TRUE(different);
+
+    free(data0);
+    free(data3);
+    mesh_free(mesh);
+    zarr_close_fileset(fs);
+    cleanup_test_zarr_fileset(paths, n_files);
+    return 1;
+}
+
+/* Test zarr_get_dim_info_fileset */
+TEST(zarr_get_dim_info_fileset_basic) {
+    const int n_files = 2;
+    const int n_nodes = 50;
+    const int times_per_file = 3;
+
+    const char **paths = create_test_zarr_fileset(n_files, n_nodes, times_per_file);
+    ASSERT_NOT_NULL(paths);
+
+    USFileSet *fs = zarr_open_fileset(paths, n_files);
+    ASSERT_NOT_NULL(fs);
+
+    /* Create mesh and scan variables */
+    USMesh *mesh = mesh_create_from_zarr(fs->files[0]);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(fs->files[0], mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find temperature variable */
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temperature") == 0) {
+            temp = v;
+            break;
+        }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    /* Get dimension info with virtual time */
+    int n_dims;
+    USDimInfo *dims = zarr_get_dim_info_fileset(fs, temp, &n_dims);
+
+    if (dims) {
+        ASSERT_GT(n_dims, 0);
+
+        /* Find time dimension and verify it has virtual size */
+        int found_time = 0;
+        for (int i = 0; i < n_dims; i++) {
+            if (strcmp(dims[i].name, "time") == 0) {
+                found_time = 1;
+                ASSERT_EQ_SIZET(dims[i].size, fs->total_times);
+            }
+        }
+        ASSERT_TRUE(found_time);
+
+        zarr_free_dim_info(dims, n_dims);
+    }
+
+    mesh_free(mesh);
+    zarr_close_fileset(fs);
+    cleanup_test_zarr_fileset(paths, n_files);
+    return 1;
+}
+
+/* Test reading across file boundaries */
+TEST(zarr_fileset_boundary_read) {
+    const int n_files = 3;
+    const int n_nodes = 30;
+    const int times_per_file = 2;
+
+    const char **paths = create_test_zarr_fileset(n_files, n_nodes, times_per_file);
+    ASSERT_NOT_NULL(paths);
+
+    USFileSet *fs = zarr_open_fileset(paths, n_files);
+    ASSERT_NOT_NULL(fs);
+
+    USMesh *mesh = mesh_create_from_zarr(fs->files[0]);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(fs->files[0], mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find temperature variable */
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temperature") == 0) {
+            temp = v;
+            break;
+        }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    /* Read from each file */
+    int status;
+    status = zarr_read_slice_fileset(fs, temp, 0, 0, data);  /* File 0, time 0 */
+    ASSERT_EQ(status, 0);
+
+    status = zarr_read_slice_fileset(fs, temp, 2, 0, data);  /* File 1, time 0 */
+    ASSERT_EQ(status, 0);
+
+    status = zarr_read_slice_fileset(fs, temp, 5, 0, data);  /* File 2, time 1 */
+    ASSERT_EQ(status, 0);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close_fileset(fs);
+    cleanup_test_zarr_fileset(paths, n_files);
+    return 1;
+}
+
 RUN_TESTS("File Zarr")
 
 #else /* !HAVE_ZARR */
