@@ -211,10 +211,8 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
         }
 
         /* For structured data, check if lat*lon = n_points */
-        int is_structured = 0;
         if (node_dim < 0 && lat_dim >= 0 && lon_dim >= 0) {
             if (dim_sizes[lat_dim] * dim_sizes[lon_dim] == mesh->n_points) {
-                is_structured = 1;
                 /* Use the last spatial dimension as "node_dim" for reading */
                 node_dim = (lat_dim > lon_dim) ? lat_dim : lon_dim;
             }
@@ -231,6 +229,7 @@ USVar *netcdf_scan_variables(USFile *file, USMesh *mesh) {
         if (!var) continue;
 
         strncpy(var->name, varname, MAX_NAME_LEN - 1);
+        var->name[MAX_NAME_LEN - 1] = '\0';
         var->n_dims = var_ndims;
         var->varid = varid;
         var->file = file;

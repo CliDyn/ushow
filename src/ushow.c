@@ -449,8 +449,8 @@ static void format_dim_label(char *buf, size_t buflen,
 static void update_dim_label(void) {
     if (!view || !current_var) return;
 
-    char time_buf[128] = "Time: -/-";
-    char depth_buf[128] = "Depth: -/-";
+    char time_buf[300] = "Time: -/-";
+    char depth_buf[300] = "Depth: -/-";
 
     if (current_var->time_dim_id >= 0) {
         const char *name = current_var->dim_names[current_var->time_dim_id];
@@ -465,7 +465,7 @@ static void update_dim_label(void) {
                          view->depth_index, view->n_depths, di, 0);
     }
 
-    char combined[256];
+    char combined[604];
     snprintf(combined, sizeof(combined), "%s  %s", time_buf, depth_buf);
     x_update_dim_label(combined);
 }

@@ -30,9 +30,12 @@ static void create_viridis_colormap(USColormap *cmap) {
         b = 0.329415f + t * (0.266658f + t * (0.123926f + t * (-0.576063f)));
 
         /* Clamp */
-        if (r < 0.0f) r = 0.0f; if (r > 1.0f) r = 1.0f;
-        if (g < 0.0f) g = 0.0f; if (g > 1.0f) g = 1.0f;
-        if (b < 0.0f) b = 0.0f; if (b > 1.0f) b = 1.0f;
+        if (r < 0.0f) r = 0.0f;
+        if (r > 1.0f) r = 1.0f;
+        if (g < 0.0f) g = 0.0f;
+        if (g > 1.0f) g = 1.0f;
+        if (b < 0.0f) b = 0.0f;
+        if (b > 1.0f) b = 1.0f;
 
         cmap->colors[i].r = (unsigned char)(r * 255.0f);
         cmap->colors[i].g = (unsigned char)(g * 255.0f);
