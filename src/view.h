@@ -18,6 +18,12 @@ USView *view_create(void);
 int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid);
 
 /*
+ * Set file set for multi-file time concatenation.
+ * Pass NULL for single-file mode.
+ */
+void view_set_fileset(USView *view, USFileSet *fileset);
+
+/*
  * Set time index and reload data.
  */
 int view_set_time(USView *view, size_t time_idx);

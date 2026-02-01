@@ -47,6 +47,7 @@ typedef enum {
 /* Forward declarations */
 typedef struct USVar USVar;
 typedef struct USFile USFile;
+typedef struct USFileSet USFileSet;
 typedef struct USMesh USMesh;
 typedef struct USRegrid USRegrid;
 typedef struct USView USView;
@@ -146,16 +147,26 @@ struct USFile {
     int         n_vars;
 };
 
+/* Multi-file set for time concatenation */
+struct USFileSet {
+    USFile    **files;              /* Array of open files */
+    int         n_files;            /* Number of files */
+    size_t     *time_offsets;       /* Cumulative time offsets [n_files+1] */
+    size_t      total_times;        /* Total virtual time steps */
+    char       *base_filename;      /* First filename (for display) */
+};
+
 /* Current view state */
 struct USView {
     USVar      *variable;           /* Current variable being displayed */
     USMesh     *mesh;               /* Current mesh/coordinates */
     USRegrid   *regrid;             /* Current regridding setup */
+    USFileSet  *fileset;            /* Multi-file set (NULL for single file) */
 
     /* Current position in data space */
-    size_t      time_index;         /* Current time step */
+    size_t      time_index;         /* Current time step (virtual if fileset) */
     size_t      depth_index;        /* Current depth level */
-    size_t      n_times;            /* Total time steps */
+    size_t      n_times;            /* Total time steps (virtual if fileset) */
     size_t      n_depths;           /* Total depth levels */
 
     /* Raw data buffer (1D, unstructured representation) */

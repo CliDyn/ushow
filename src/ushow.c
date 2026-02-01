@@ -19,6 +19,7 @@
 
 /* Global state */
 static USFile *file = NULL;
+static USFileSet *fileset = NULL;  /* Multi-file set (NULL for single file) */
 static USMesh *mesh = NULL;
 static USRegrid *regrid = NULL;
 static USView *view = NULL;
@@ -66,7 +67,12 @@ static void on_var_select(int var_index) {
     if (current_dim_info) {
         netcdf_free_dim_info(current_dim_info, n_current_dims);
     }
-    current_dim_info = netcdf_get_dim_info(var, &n_current_dims);
+    /* Use fileset dimension info if available (includes virtual time) */
+    if (fileset) {
+        current_dim_info = netcdf_get_dim_info_fileset(fileset, var, &n_current_dims);
+    } else {
+        current_dim_info = netcdf_get_dim_info(var, &n_current_dims);
+    }
     if (!current_dim_info || n_current_dims == 0) {
         int count = 0;
         if (var->time_dim_id >= 0) count++;
@@ -539,18 +545,26 @@ static void update_display(void) {
 }
 
 static void print_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [options] <data_file.nc>\n\n", prog);
+    fprintf(stderr, "Usage: %s [options] <data_file.nc> [file2.nc ...]\n\n", prog);
+    fprintf(stderr, "Multi-file: Files are concatenated along time dimension.\n");
+    fprintf(stderr, "Glob patterns are supported (quote them to prevent shell expansion).\n\n");
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -m, --mesh <file>      Mesh file with coordinates\n");
     fprintf(stderr, "  -r, --resolution <deg> Target grid resolution (default: 1.0)\n");
     fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay (default: 200)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
+    fprintf(stderr, "\nExamples:\n");
+    fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
+    fprintf(stderr, "  %s data.nc -m mesh.nc                # With separate mesh\n", prog);
+    fprintf(stderr, "  %s \"data.*.nc\" -m mesh.nc           # Multi-file with glob\n", prog);
+    fprintf(stderr, "  %s data.1960.nc data.1961.nc -m mesh # Multi-file explicit\n", prog);
 }
 
 int main(int argc, char *argv[]) {
-    const char *data_filename = NULL;
     const char *mesh_filename = NULL;
+    int n_data_files = 0;
+    const char **data_filenames = NULL;
 
     /* Parse command line options */
     static struct option long_options[] = {
@@ -590,10 +604,38 @@ int main(int argc, char *argv[]) {
         print_usage(argv[0]);
         return 1;
     }
-    data_filename = argv[optind];
+
+    /* Collect data file arguments */
+    n_data_files = argc - optind;
+    data_filenames = (const char **)&argv[optind];
 
     printf("=== ushow: Unstructured Data Viewer ===\n\n");
-    printf("Data file: %s\n", data_filename);
+
+    /* Check if first argument looks like a glob pattern */
+    int use_glob = 0;
+    if (n_data_files == 1) {
+        const char *fn = data_filenames[0];
+        for (const char *p = fn; *p; p++) {
+            if (*p == '*' || *p == '?' || *p == '[') {
+                use_glob = 1;
+                break;
+            }
+        }
+    }
+
+    if (use_glob) {
+        printf("Glob pattern: %s\n", data_filenames[0]);
+    } else if (n_data_files > 1) {
+        printf("Data files: %d files\n", n_data_files);
+        for (int i = 0; i < n_data_files && i < 3; i++) {
+            printf("  %s\n", data_filenames[i]);
+        }
+        if (n_data_files > 3) {
+            printf("  ... and %d more\n", n_data_files - 3);
+        }
+    } else {
+        printf("Data file: %s\n", data_filenames[0]);
+    }
     if (mesh_filename) printf("Mesh file: %s\n", mesh_filename);
     printf("Resolution: %.2f degrees\n", options.target_resolution);
     printf("Influence radius: %.0f m\n", options.influence_radius);
@@ -602,12 +644,32 @@ int main(int argc, char *argv[]) {
     /* Initialize colormaps */
     colormaps_init();
 
-    /* Open data file */
-    printf("Opening data file...\n");
-    file = netcdf_open(data_filename);
-    if (!file) {
-        fprintf(stderr, "Failed to open data file: %s\n", data_filename);
-        return 1;
+    /* Open data file(s) */
+    printf("Opening data file(s)...\n");
+
+    if (use_glob) {
+        /* Use glob pattern */
+        fileset = netcdf_open_glob(data_filenames[0]);
+        if (!fileset) {
+            fprintf(stderr, "Failed to open files matching: %s\n", data_filenames[0]);
+            return 1;
+        }
+        file = fileset->files[0];  /* Primary file for variable scanning */
+    } else if (n_data_files > 1) {
+        /* Multiple explicit files */
+        fileset = netcdf_open_fileset(data_filenames, n_data_files);
+        if (!fileset) {
+            fprintf(stderr, "Failed to open data files\n");
+            return 1;
+        }
+        file = fileset->files[0];  /* Primary file for variable scanning */
+    } else {
+        /* Single file */
+        file = netcdf_open(data_filenames[0]);
+        if (!file) {
+            fprintf(stderr, "Failed to open data file: %s\n", data_filenames[0]);
+            return 1;
+        }
     }
 
     /* Load mesh */
@@ -670,7 +732,12 @@ int main(int argc, char *argv[]) {
     USDimInfo *init_dims = NULL;
     int n_init_dims = 0;
     if (max_var) {
-        init_dims = netcdf_get_dim_info(max_var, &n_init_dims);
+        /* Use fileset dimension info if available (includes virtual time) */
+        if (fileset) {
+            init_dims = netcdf_get_dim_info_fileset(fileset, max_var, &n_init_dims);
+        } else {
+            init_dims = netcdf_get_dim_info(max_var, &n_init_dims);
+        }
         if (!init_dims || n_init_dims == 0) {
             int count = 0;
             if (max_var->time_dim_id >= 0) count++;
@@ -739,6 +806,11 @@ int main(int argc, char *argv[]) {
     /* Create view */
     view = view_create();
 
+    /* Set fileset if using multiple files */
+    if (fileset) {
+        view_set_fileset(view, fileset);
+    }
+
     /* Select first variable */
     on_var_select(0);
 
@@ -763,7 +835,11 @@ int main(int argc, char *argv[]) {
     view_free(view);
     regrid_free(regrid);
     mesh_free(mesh);
-    netcdf_close(file);
+    if (fileset) {
+        netcdf_close_fileset(fileset);
+    } else {
+        netcdf_close(file);
+    }
     colormaps_cleanup();
 
     return 0;

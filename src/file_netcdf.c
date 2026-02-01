@@ -490,3 +490,305 @@ void netcdf_free_dim_info(USDimInfo *dims, int n_dims) {
     }
     free(dims);
 }
+
+/*
+ * Multi-file support implementation
+ */
+
+#include <glob.h>
+
+/* Comparison function for sorting filenames */
+static int compare_strings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+USFileSet *netcdf_open_fileset(const char **filenames, int n_files) {
+    if (!filenames || n_files <= 0) return NULL;
+
+    USFileSet *fs = calloc(1, sizeof(USFileSet));
+    if (!fs) return NULL;
+
+    /* Allocate arrays */
+    fs->files = calloc(n_files, sizeof(USFile *));
+    fs->time_offsets = calloc(n_files + 1, sizeof(size_t));
+    if (!fs->files || !fs->time_offsets) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+
+    /* Create sorted copy of filenames */
+    char **sorted_names = malloc(n_files * sizeof(char *));
+    if (!sorted_names) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+    for (int i = 0; i < n_files; i++) {
+        sorted_names[i] = strdup(filenames[i]);
+    }
+    qsort(sorted_names, n_files, sizeof(char *), compare_strings);
+
+    /* Open each file and count time steps */
+    fs->time_offsets[0] = 0;
+    for (int i = 0; i < n_files; i++) {
+        printf("Opening file %d/%d: %s\n", i + 1, n_files, sorted_names[i]);
+        fs->files[i] = netcdf_open(sorted_names[i]);
+        if (!fs->files[i]) {
+            fprintf(stderr, "Failed to open file: %s\n", sorted_names[i]);
+            /* Cleanup */
+            for (int j = 0; j < i; j++) {
+                netcdf_close(fs->files[j]);
+            }
+            for (int j = 0; j < n_files; j++) {
+                free(sorted_names[j]);
+            }
+            free(sorted_names);
+            free(fs->files);
+            free(fs->time_offsets);
+            free(fs);
+            return NULL;
+        }
+
+        /* Get time dimension size from this file */
+        int ncid = fs->files[i]->ncid;
+        int time_dimid;
+        size_t time_size = 0;
+
+        /* Try common time dimension names */
+        for (const char **name = TIME_NAMES; *name; name++) {
+            if (nc_inq_dimid(ncid, *name, &time_dimid) == NC_NOERR) {
+                nc_inq_dimlen(ncid, time_dimid, &time_size);
+                break;
+            }
+        }
+
+        /* Also try to find unlimited dimension */
+        if (time_size == 0) {
+            int unlim_dimid;
+            if (nc_inq_unlimdim(ncid, &unlim_dimid) == NC_NOERR && unlim_dimid >= 0) {
+                nc_inq_dimlen(ncid, unlim_dimid, &time_size);
+            }
+        }
+
+        if (time_size == 0) {
+            time_size = 1;  /* Assume single time step */
+        }
+
+        fs->time_offsets[i + 1] = fs->time_offsets[i] + time_size;
+        printf("  File %d: %zu time steps (offset %zu)\n", i, time_size, fs->time_offsets[i]);
+    }
+
+    fs->n_files = n_files;
+    fs->total_times = fs->time_offsets[n_files];
+    fs->base_filename = strdup(sorted_names[0]);
+
+    printf("Total virtual time steps: %zu across %d files\n", fs->total_times, n_files);
+
+    /* Cleanup sorted names */
+    for (int i = 0; i < n_files; i++) {
+        free(sorted_names[i]);
+    }
+    free(sorted_names);
+
+    return fs;
+}
+
+USFileSet *netcdf_open_glob(const char *pattern) {
+    if (!pattern) return NULL;
+
+    glob_t glob_result;
+    int ret = glob(pattern, GLOB_TILDE | GLOB_NOSORT, NULL, &glob_result);
+
+    if (ret != 0) {
+        if (ret == GLOB_NOMATCH) {
+            fprintf(stderr, "No files match pattern: %s\n", pattern);
+        } else {
+            fprintf(stderr, "Glob error for pattern: %s\n", pattern);
+        }
+        return NULL;
+    }
+
+    if (glob_result.gl_pathc == 0) {
+        fprintf(stderr, "No files match pattern: %s\n", pattern);
+        globfree(&glob_result);
+        return NULL;
+    }
+
+    printf("Pattern '%s' matched %zu files\n", pattern, glob_result.gl_pathc);
+
+    USFileSet *fs = netcdf_open_fileset((const char **)glob_result.gl_pathv,
+                                        (int)glob_result.gl_pathc);
+    globfree(&glob_result);
+
+    return fs;
+}
+
+int netcdf_fileset_map_time(USFileSet *fs, size_t virtual_time,
+                            int *file_idx_out, size_t *local_time_out) {
+    if (!fs || !file_idx_out || !local_time_out) return -1;
+    if (virtual_time >= fs->total_times) return -1;
+
+    /* Binary search for the file containing this time step */
+    int lo = 0, hi = fs->n_files - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (fs->time_offsets[mid] <= virtual_time) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    *file_idx_out = lo;
+    *local_time_out = virtual_time - fs->time_offsets[lo];
+    return 0;
+}
+
+int netcdf_read_slice_fileset(USFileSet *fs, USVar *var,
+                              size_t virtual_time, size_t depth_idx, float *data) {
+    if (!fs || !var || !data) return -1;
+
+    int file_idx;
+    size_t local_time;
+    if (netcdf_fileset_map_time(fs, virtual_time, &file_idx, &local_time) != 0) {
+        fprintf(stderr, "Invalid virtual time index: %zu\n", virtual_time);
+        return -1;
+    }
+
+    /* Get the file and find matching variable */
+    USFile *file = fs->files[file_idx];
+
+    /* For files other than the first, we need to find the variable by name */
+    int varid = var->varid;
+    if (file_idx > 0) {
+        if (nc_inq_varid(file->ncid, var->name, &varid) != NC_NOERR) {
+            fprintf(stderr, "Variable '%s' not found in file %d\n", var->name, file_idx);
+            return -1;
+        }
+    }
+
+    /* Build hyperslab for this file */
+    size_t start[MAX_DIMS] = {0};
+    size_t count[MAX_DIMS];
+
+    for (int d = 0; d < var->n_dims; d++) {
+        if (d == var->time_dim_id) {
+            start[d] = local_time;
+            count[d] = 1;
+        } else if (d == var->depth_dim_id) {
+            start[d] = depth_idx;
+            count[d] = 1;
+        } else {
+            start[d] = 0;
+            count[d] = var->dim_sizes[d];
+        }
+    }
+
+    /* Read data */
+    int status = nc_get_vara_float(file->ncid, varid, start, count, data);
+    if (status != NC_NOERR) {
+        fprintf(stderr, "Error reading %s from file %d: %s\n",
+                var->name, file_idx, nc_strerror(status));
+        return -1;
+    }
+
+    /* Apply scale_factor and add_offset if present */
+    float scale = 1.0f, offset = 0.0f;
+    nc_get_att_float(file->ncid, varid, "scale_factor", &scale);
+    nc_get_att_float(file->ncid, varid, "add_offset", &offset);
+
+    if (scale != 1.0f || offset != 0.0f) {
+        for (size_t i = 0; i < var->mesh->n_points; i++) {
+            if (fabsf(data[i] - var->fill_value) > 1e-6f * fabsf(var->fill_value)) {
+                data[i] = data[i] * scale + offset;
+            }
+        }
+    }
+
+    return 0;
+}
+
+size_t netcdf_fileset_total_times(USFileSet *fs) {
+    return fs ? fs->total_times : 0;
+}
+
+USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out) {
+    if (!fs || !var || !n_dims_out || fs->n_files == 0) return NULL;
+
+    /* Get base dimension info from the variable */
+    USDimInfo *dims = netcdf_get_dim_info(var, n_dims_out);
+    if (!dims) return NULL;
+
+    /* Update time dimension with virtual total and concatenated values */
+    for (int i = 0; i < *n_dims_out; i++) {
+        if (var->time_dim_id >= 0 &&
+            strcmp(dims[i].name, var->dim_names[var->time_dim_id]) == 0) {
+            /* This is the time dimension - update with virtual info */
+            double *old_values = dims[i].values;
+
+            dims[i].size = fs->total_times;
+            dims[i].is_scannable = (fs->total_times > 1);
+
+            /* Allocate space for all time values */
+            dims[i].values = malloc(fs->total_times * sizeof(double));
+            if (dims[i].values) {
+                size_t offset = 0;
+
+                /* Collect time values from all files */
+                for (int f = 0; f < fs->n_files; f++) {
+                    int ncid = fs->files[f]->ncid;
+                    int coord_varid;
+                    size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
+
+                    if (nc_inq_varid(ncid, dims[i].name, &coord_varid) == NC_NOERR) {
+                        double *file_values = malloc(file_times * sizeof(double));
+                        if (file_values) {
+                            if (nc_get_var_double(ncid, coord_varid, file_values) == NC_NOERR) {
+                                memcpy(&dims[i].values[offset], file_values,
+                                       file_times * sizeof(double));
+                            } else {
+                                /* Fall back to indices */
+                                for (size_t t = 0; t < file_times; t++) {
+                                    dims[i].values[offset + t] = (double)(offset + t);
+                                }
+                            }
+                            free(file_values);
+                        }
+                    } else {
+                        /* No coordinate variable, use indices */
+                        for (size_t t = 0; t < file_times; t++) {
+                            dims[i].values[offset + t] = (double)(offset + t);
+                        }
+                    }
+                    offset += file_times;
+                }
+
+                dims[i].min_val = dims[i].values[0];
+                dims[i].max_val = dims[i].values[fs->total_times - 1];
+            }
+
+            free(old_values);
+            break;
+        }
+    }
+
+    return dims;
+}
+
+void netcdf_close_fileset(USFileSet *fs) {
+    if (!fs) return;
+
+    for (int i = 0; i < fs->n_files; i++) {
+        if (fs->files[i]) {
+            netcdf_close(fs->files[i]);
+        }
+    }
+
+    free(fs->files);
+    free(fs->time_offsets);
+    free(fs->base_filename);
+    free(fs);
+}

@@ -4,7 +4,13 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g
+# --enable-new-dtags is Linux-only, skip on macOS (Darwin)
+UNAME_S := $(shell uname -s)
+ifneq ($(UNAME_S),Darwin)
 LDFLAGS = -Wl,--enable-new-dtags
+else
+LDFLAGS =
+endif
 
 # NetCDF - try DKRZ system installation first, fall back to system nc-config
 DKRZ_NC_CONFIG := /sw/spack-levante/netcdf-c-4.8.1-qk24yp/bin/nc-config

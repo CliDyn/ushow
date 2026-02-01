@@ -21,6 +21,12 @@ USView *view_create(void) {
     return view;
 }
 
+void view_set_fileset(USView *view, USFileSet *fileset) {
+    if (view) {
+        view->fileset = fileset;
+    }
+}
+
 int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) {
     if (!view || !var || !mesh || !regrid) return -1;
 
@@ -28,8 +34,12 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     view->mesh = mesh;
     view->regrid = regrid;
 
-    /* Get dimension info */
-    view->n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
+    /* Get dimension info - use fileset total if available */
+    if (view->fileset) {
+        view->n_times = netcdf_fileset_total_times(view->fileset);
+    } else {
+        view->n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
+    }
     view->n_depths = (var->depth_dim_id >= 0) ? var->dim_sizes[var->depth_dim_id] : 1;
     view->time_index = 0;
     view->depth_index = 0;
@@ -141,9 +151,18 @@ int view_set_scale(USView *view, int scale) {
 int view_update(USView *view) {
     if (!view || !view->variable || !view->mesh || !view->regrid) return -1;
 
-    /* Read data slice */
-    if (netcdf_read_slice(view->variable, view->time_index, view->depth_index,
-                          view->raw_data) != 0) {
+    /* Read data slice - use fileset if available */
+    int read_result;
+    if (view->fileset) {
+        read_result = netcdf_read_slice_fileset(view->fileset, view->variable,
+                                                 view->time_index, view->depth_index,
+                                                 view->raw_data);
+    } else {
+        read_result = netcdf_read_slice(view->variable, view->time_index,
+                                        view->depth_index, view->raw_data);
+    }
+
+    if (read_result != 0) {
         fprintf(stderr, "Failed to read data slice\n");
         return -1;
     }
