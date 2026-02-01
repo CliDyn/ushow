@@ -41,7 +41,10 @@ typedef enum {
 /* File type */
 typedef enum {
     FILE_TYPE_UNKNOWN = 0,
-    FILE_TYPE_NETCDF
+    FILE_TYPE_NETCDF,
+#ifdef HAVE_ZARR
+    FILE_TYPE_ZARR,
+#endif
 } FileType;
 
 /* Forward declarations */
@@ -129,6 +132,11 @@ struct USVar {
     USFile     *file;
     int         varid;              /* NetCDF variable ID */
 
+#ifdef HAVE_ZARR
+    /* Zarr-specific */
+    void       *zarr_data;          /* ZarrArray* for zarr variables */
+#endif
+
     /* Linked list */
     USVar      *next;
 };
@@ -141,6 +149,11 @@ struct USFile {
 
     /* NetCDF-specific */
     int         ncid;               /* NetCDF file ID */
+
+#ifdef HAVE_ZARR
+    /* Zarr-specific */
+    void       *zarr_data;          /* ZarrStore* for zarr files */
+#endif
 
     /* Variables in this file */
     USVar      *vars;

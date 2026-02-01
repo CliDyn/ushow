@@ -1,0 +1,65 @@
+/*
+ * file_zarr.h - Zarr v2 file reading (optional compile-time feature)
+ *
+ * Build with: make WITH_ZARR=1
+ * Requires: c-blosc, lz4 libraries
+ */
+
+#ifndef FILE_ZARR_H
+#define FILE_ZARR_H
+
+#include "ushow.defines.h"
+
+#ifdef HAVE_ZARR
+
+/*
+ * Check if path is a zarr store (directory containing .zgroup).
+ * Returns 1 if zarr, 0 otherwise.
+ */
+int zarr_is_zarr_store(const char *path);
+
+/*
+ * Open a zarr store.
+ * path: path to zarr directory (e.g., "data.zarr/")
+ * Returns NULL on error.
+ */
+USFile *zarr_open(const char *path);
+
+/*
+ * Scan zarr store for displayable variables.
+ * Returns linked list of variables.
+ */
+USVar *zarr_scan_variables(USFile *file, USMesh *mesh);
+
+/*
+ * Read a 2D slice of data from a zarr variable.
+ * var: variable to read
+ * time_idx: time index (ignored if no time dimension)
+ * depth_idx: depth index (ignored if no depth dimension)
+ * data: output buffer [n_points], must be preallocated
+ */
+int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data);
+
+/*
+ * Estimate min/max range for a variable by sampling.
+ */
+int zarr_estimate_range(USVar *var, float *min_val, float *max_val);
+
+/*
+ * Read dimension coordinate values and metadata.
+ * Returns allocated USDimInfo array (must be freed with zarr_free_dim_info).
+ */
+USDimInfo *zarr_get_dim_info(USVar *var, int *n_dims_out);
+
+/*
+ * Free dimension info array.
+ */
+void zarr_free_dim_info(USDimInfo *dims, int n_dims);
+
+/*
+ * Close zarr store and free all resources.
+ */
+void zarr_close(USFile *file);
+
+#endif /* HAVE_ZARR */
+#endif /* FILE_ZARR_H */

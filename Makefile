@@ -63,6 +63,17 @@ endif
 CFLAGS += $(NETCDF_CFLAGS) $(X11_CFLAGS)
 LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) $(X11_LIBS) $(X11_RPATH) -lm
 
+# Zarr support (optional) - build with: make WITH_ZARR=1
+# Requires: brew install c-blosc lz4
+ifdef WITH_ZARR
+BLOSC_PREFIX := $(shell brew --prefix c-blosc 2>/dev/null || echo "/usr/local")
+LZ4_PREFIX := $(shell brew --prefix lz4 2>/dev/null || echo "/usr/local")
+ZARR_CFLAGS := -DHAVE_ZARR -I$(BLOSC_PREFIX)/include -I$(LZ4_PREFIX)/include
+ZARR_LIBS := -L$(BLOSC_PREFIX)/lib -L$(LZ4_PREFIX)/lib -lblosc -llz4
+CFLAGS += $(ZARR_CFLAGS)
+LIBS += $(ZARR_LIBS)
+endif
+
 # Directories
 SRCDIR = src
 OBJDIR = obj
@@ -82,6 +93,12 @@ SRCS = $(SRCDIR)/ushow.c \
 # Objects
 OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 
+# Add zarr sources if enabled
+ifdef WITH_ZARR
+SRCS += $(SRCDIR)/file_zarr.c
+OBJS += $(OBJDIR)/file_zarr.o $(OBJDIR)/cJSON/cJSON.o
+endif
+
 # Target
 TARGET = $(BINDIR)/ushow
 
@@ -92,6 +109,10 @@ all: dirs $(TARGET)
 dirs:
 	@mkdir -p $(OBJDIR)
 	@mkdir -p $(OBJDIR)/interface
+ifdef WITH_ZARR
+	@mkdir -p $(SRCDIR)/cJSON
+	@mkdir -p $(OBJDIR)/cJSON
+endif
 
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
@@ -101,6 +122,10 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 $(OBJDIR)/interface/%.o: $(SRCDIR)/interface/%.c
+	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
+
+# cJSON object file (zarr support)
+$(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c
 	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 clean:
@@ -124,6 +149,13 @@ $(OBJDIR)/interface/x_interface.o: $(SRCDIR)/interface/x_interface.c \
                                     $(SRCDIR)/interface/colorbar.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/interface/colorbar.o: $(SRCDIR)/interface/colorbar.c \
                                  $(SRCDIR)/interface/colorbar.h $(SRCDIR)/colormaps.h
+
+# Zarr dependencies (when WITH_ZARR is set)
+ifdef WITH_ZARR
+$(OBJDIR)/file_zarr.o: $(SRCDIR)/file_zarr.c $(SRCDIR)/file_zarr.h $(SRCDIR)/ushow.defines.h \
+                        $(SRCDIR)/cJSON/cJSON.h
+$(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c $(SRCDIR)/cJSON/cJSON.h
+endif
 
 # Print configuration
 info:

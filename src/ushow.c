@@ -8,6 +8,9 @@
 #include "mesh.h"
 #include "regrid.h"
 #include "file_netcdf.h"
+#ifdef HAVE_ZARR
+#include "file_zarr.h"
+#endif
 #include "colormaps.h"
 #include "view.h"
 #include "interface/x_interface.h"
@@ -68,6 +71,11 @@ static void on_var_select(int var_index) {
         netcdf_free_dim_info(current_dim_info, n_current_dims);
     }
     /* Use fileset dimension info if available (includes virtual time) */
+#ifdef HAVE_ZARR
+    if (var->file && var->file->file_type == FILE_TYPE_ZARR) {
+        current_dim_info = zarr_get_dim_info(var, &n_current_dims);
+    } else
+#endif
     if (fileset) {
         current_dim_info = netcdf_get_dim_info_fileset(fileset, var, &n_current_dims);
     } else {
@@ -647,6 +655,17 @@ int main(int argc, char *argv[]) {
     /* Open data file(s) */
     printf("Opening data file(s)...\n");
 
+#ifdef HAVE_ZARR
+    /* Check if first file is a zarr store */
+    if (n_data_files == 1 && !use_glob && zarr_is_zarr_store(data_filenames[0])) {
+        printf("Detected zarr store: %s\n", data_filenames[0]);
+        file = zarr_open(data_filenames[0]);
+        if (!file) {
+            fprintf(stderr, "Failed to open zarr store: %s\n", data_filenames[0]);
+            return 1;
+        }
+    } else
+#endif
     if (use_glob) {
         /* Use glob pattern */
         fileset = netcdf_open_glob(data_filenames[0]);
@@ -674,11 +693,25 @@ int main(int argc, char *argv[]) {
 
     /* Load mesh */
     printf("Loading mesh...\n");
-    mesh = mesh_create_from_netcdf(file->ncid, mesh_filename);
-    if (!mesh) {
-        fprintf(stderr, "Failed to load mesh\n");
-        netcdf_close(file);
-        return 1;
+#ifdef HAVE_ZARR
+    if (file->file_type == FILE_TYPE_ZARR) {
+        /* For zarr, load coordinates from the store itself */
+        mesh = mesh_create_from_zarr(file);
+        if (!mesh) {
+            fprintf(stderr, "Failed to load mesh from zarr store\n");
+            zarr_close(file);
+            return 1;
+        }
+    } else
+#endif
+    {
+        mesh = mesh_create_from_netcdf(file->ncid, mesh_filename);
+        if (!mesh) {
+            fprintf(stderr, "Failed to load mesh\n");
+            if (fileset) netcdf_close_fileset(fileset);
+            else netcdf_close(file);
+            return 1;
+        }
     }
 
     /* Create regridding structure */
@@ -693,12 +726,24 @@ int main(int argc, char *argv[]) {
 
     /* Scan for variables */
     printf("Scanning for variables...\n");
-    variables = netcdf_scan_variables(file, mesh);
+#ifdef HAVE_ZARR
+    if (file->file_type == FILE_TYPE_ZARR) {
+        variables = zarr_scan_variables(file, mesh);
+    } else
+#endif
+    {
+        variables = netcdf_scan_variables(file, mesh);
+    }
     if (!variables) {
         fprintf(stderr, "No displayable variables found\n");
         regrid_free(regrid);
         mesh_free(mesh);
-        netcdf_close(file);
+#ifdef HAVE_ZARR
+        if (file->file_type == FILE_TYPE_ZARR) zarr_close(file);
+        else
+#endif
+        if (fileset) netcdf_close_fileset(fileset);
+        else netcdf_close(file);
         return 1;
     }
 
@@ -733,6 +778,11 @@ int main(int argc, char *argv[]) {
     int n_init_dims = 0;
     if (max_var) {
         /* Use fileset dimension info if available (includes virtual time) */
+#ifdef HAVE_ZARR
+        if (file->file_type == FILE_TYPE_ZARR) {
+            init_dims = zarr_get_dim_info(max_var, &n_init_dims);
+        } else
+#endif
         if (fileset) {
             init_dims = netcdf_get_dim_info_fileset(fileset, max_var, &n_init_dims);
         } else {
@@ -835,6 +885,11 @@ int main(int argc, char *argv[]) {
     view_free(view);
     regrid_free(regrid);
     mesh_free(mesh);
+#ifdef HAVE_ZARR
+    if (file && file->file_type == FILE_TYPE_ZARR) {
+        zarr_close(file);
+    } else
+#endif
     if (fileset) {
         netcdf_close_fileset(fileset);
     } else {

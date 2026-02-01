@@ -38,6 +38,14 @@ USMesh *mesh_create(double *lon, double *lat, size_t n_points, CoordType type);
  */
 USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename);
 
+#ifdef HAVE_ZARR
+/*
+ * Create mesh by loading coordinates from a Zarr store.
+ * Coordinates are expected in latitude/longitude arrays within the store.
+ */
+USMesh *mesh_create_from_zarr(USFile *file);
+#endif
+
 /*
  * Free mesh and all associated memory.
  */

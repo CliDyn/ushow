@@ -4,6 +4,9 @@
 
 #include "view.h"
 #include "file_netcdf.h"
+#ifdef HAVE_ZARR
+#include "file_zarr.h"
+#endif
 #include "regrid.h"
 #include "colormaps.h"
 #include <stdlib.h>
@@ -76,7 +79,14 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 
     /* Estimate data range if not set */
     if (!var->range_set) {
-        netcdf_estimate_range(var, &var->global_min, &var->global_max);
+#ifdef HAVE_ZARR
+        if (var->file && var->file->file_type == FILE_TYPE_ZARR) {
+            zarr_estimate_range(var, &var->global_min, &var->global_max);
+        } else
+#endif
+        {
+            netcdf_estimate_range(var, &var->global_min, &var->global_max);
+        }
         var->user_min = var->global_min;
         var->user_max = var->global_max;
         var->range_set = 1;
@@ -151,8 +161,14 @@ int view_set_scale(USView *view, int scale) {
 int view_update(USView *view) {
     if (!view || !view->variable || !view->mesh || !view->regrid) return -1;
 
-    /* Read data slice - use fileset if available */
+    /* Read data slice - dispatch based on file type */
     int read_result;
+#ifdef HAVE_ZARR
+    if (view->variable->file && view->variable->file->file_type == FILE_TYPE_ZARR) {
+        read_result = zarr_read_slice(view->variable, view->time_index,
+                                      view->depth_index, view->raw_data);
+    } else
+#endif
     if (view->fileset) {
         read_result = netcdf_read_slice_fileset(view->fileset, view->variable,
                                                  view->time_index, view->depth_index,
