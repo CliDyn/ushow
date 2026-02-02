@@ -20,12 +20,12 @@
 
 /* Common coordinate variable names to search for */
 static const char *LON_NAMES[] = {
-    "lon", "longitude", "x", "nav_lon", "glon",
+  "lon", "longitude", "x", "nav_lon", "glon", "clon",
     "xt_ocean", "xu_ocean", "xh", "xq", NULL
 };
 
 static const char *LAT_NAMES[] = {
-    "lat", "latitude", "y", "nav_lat", "glat",
+  "lat", "latitude", "y", "nav_lat", "glat", "clat",
     "yt_ocean", "yu_ocean", "yh", "yq", NULL
 };
 
