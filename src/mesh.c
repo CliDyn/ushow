@@ -29,6 +29,14 @@ static const char *LAT_NAMES[] = {
     "yt_ocean", "yu_ocean", "yh", "yq", NULL
 };
 
+/* Check if units string indicates radians */
+static int is_radian_units(const char *units) {
+    if (!units) return 0;
+    return (strcasecmp(units, "rad") == 0 || 
+            strcasecmp(units, "radian") == 0 || 
+            strcasecmp(units, "radians") == 0);
+}
+
 void lonlat_to_cartesian(double lon_deg, double lat_deg,
                          double *x, double *y, double *z) {
     double lon_rad = lon_deg * DEG2RAD;
@@ -85,7 +93,40 @@ typedef struct {
     int ndims;
     size_t dims[2];  /* dims[0] = first dim size, dims[1] = second (if 2D) */
     size_t total_size;
+    char units[32];  /* units attribute (e.g., "degrees", "radians") */
 } CoordInfo;
+
+/* Read units attribute from a NetCDF variable */
+static void read_units_attribute(int ncid, int varid, char *units, size_t units_size) {
+    /* Default to "degrees" */
+    strncpy(units, "degrees", units_size - 1);
+    units[units_size - 1] = '\0';
+    
+    size_t units_len;
+    int status = nc_inq_attlen(ncid, varid, "units", &units_len);
+    if (status == NC_NOERR) {
+        if (units_len < units_size) {
+            status = nc_get_att_text(ncid, varid, "units", units);
+            if (status == NC_NOERR) {
+                units[units_len] = '\0';  /* Null-terminate */
+            }
+        } else {
+            /* Read and print the oversized units attribute */
+            char *units_buf = malloc(units_len + 1);
+            if (units_buf) {
+                status = nc_get_att_text(ncid, varid, "units", units_buf);
+                if (status == NC_NOERR) {
+                    units_buf[units_len] = '\0';
+                    fprintf(stderr, "Warning: units attribute too long (%zu chars): '%s', using default 'degrees'\n", 
+                            units_len, units_buf);
+                }
+                free(units_buf);
+            } else {
+                fprintf(stderr, "Warning: units attribute too long (%zu chars), using default 'degrees'\n", units_len);
+            }
+        }
+    }
+}
 
 /* Find a coordinate variable by trying common names */
 static int find_coord_var(int ncid, const char **names, CoordInfo *info) {
@@ -95,6 +136,8 @@ static int find_coord_var(int ncid, const char **names, CoordInfo *info) {
         status = nc_inq_varid(ncid, names[i], &info->varid);
         if (status == NC_NOERR) {
             nc_inq_varndims(ncid, info->varid, &info->ndims);
+
+            read_units_attribute(ncid, info->varid, info->units, sizeof(info->units));
 
             if (info->ndims == 1) {
                 int dimid;
@@ -272,6 +315,15 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     /* Close mesh file if it was opened separately */
     if (mesh_filename && mesh_filename[0]) {
         nc_close(mesh_ncid);
+    }
+
+    /* Convert from radians to degrees if necessary */
+    if (is_radian_units(lon_info.units) || is_radian_units(lat_info.units)) {
+        printf("Converting coordinates from radians to degrees\n");
+        for (size_t i = 0; i < n_points; i++) {
+            lon[i] = lon[i] * RAD2DEG;
+            lat[i] = lat[i] * RAD2DEG;
+        }
     }
 
     /* Normalize longitude to [-180, 180] */
