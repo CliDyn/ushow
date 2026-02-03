@@ -581,6 +581,374 @@ TEST(zarr_usvar_structure) {
     return 1;
 }
 
+/* ---- Multi-chunk zarr tests ---- */
+
+/*
+ * Create a zarr store with multiple chunks for coordinates and data.
+ * This tests the fix for issue where only chunk 0 was being read.
+ *
+ * Creates:
+ * - Coordinates split into multiple chunks (e.g., 100 points with chunk size 30)
+ * - Data variable split into multiple spatial chunks
+ */
+static const char *create_multichunk_zarr_store(int n_nodes, int coord_chunk_size,
+                                                 int n_times, int time_chunk_size,
+                                                 int spatial_chunk_size) {
+    static char store_path[256];
+    snprintf(store_path, sizeof(store_path), "/tmp/test_ushow_zarr_multichunk_%d_%d.zarr",
+             getpid(), zarr_test_counter++);
+
+    /* Remove any existing store */
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+    int ret = system(cmd);
+    (void)ret;
+
+    /* Create store directory */
+    if (mkdir(store_path, 0755) != 0) return NULL;
+
+    /* Write .zgroup */
+    if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return NULL;
+    if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return NULL;
+
+    /* Create latitude array directory */
+    char array_dir[512];
+    snprintf(array_dir, sizeof(array_dir), "%s/latitude", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    /* latitude .zarray metadata with chunking */
+    char zarray_lat[1024];
+    snprintf(zarray_lat, sizeof(zarray_lat),
+             "{"
+             "\"chunks\":[%d],"
+             "\"compressor\":null,"
+             "\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\","
+             "\"filters\":null,"
+             "\"order\":\"C\","
+             "\"shape\":[%d],"
+             "\"zarr_format\":2"
+             "}",
+             coord_chunk_size, n_nodes);
+    if (write_zarr_file(store_path, "latitude/.zarray", zarray_lat) != 0) return NULL;
+    if (write_zarr_file(store_path, "latitude/.zattrs", "{\"units\":\"degrees_north\"}") != 0) return NULL;
+
+    /* Write latitude data in multiple chunks */
+    double *lat_data = malloc(n_nodes * sizeof(double));
+    if (!lat_data) return NULL;
+    for (int i = 0; i < n_nodes; i++) {
+        lat_data[i] = -90.0 + 180.0 * i / (n_nodes - 1);
+    }
+
+    int n_coord_chunks = (n_nodes + coord_chunk_size - 1) / coord_chunk_size;
+    for (int c = 0; c < n_coord_chunks; c++) {
+        int start = c * coord_chunk_size;
+        int count = coord_chunk_size;
+        if (start + count > n_nodes) count = n_nodes - start;
+
+        char chunk_name[32];
+        snprintf(chunk_name, sizeof(chunk_name), "%d", c);
+        if (write_zarr_chunk(store_path, "latitude", chunk_name,
+                            &lat_data[start], count * sizeof(double)) != 0) {
+            free(lat_data);
+            return NULL;
+        }
+    }
+    free(lat_data);
+
+    /* Create longitude array directory */
+    snprintf(array_dir, sizeof(array_dir), "%s/longitude", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_lon[1024];
+    snprintf(zarray_lon, sizeof(zarray_lon),
+             "{"
+             "\"chunks\":[%d],"
+             "\"compressor\":null,"
+             "\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\","
+             "\"filters\":null,"
+             "\"order\":\"C\","
+             "\"shape\":[%d],"
+             "\"zarr_format\":2"
+             "}",
+             coord_chunk_size, n_nodes);
+    if (write_zarr_file(store_path, "longitude/.zarray", zarray_lon) != 0) return NULL;
+    if (write_zarr_file(store_path, "longitude/.zattrs", "{\"units\":\"degrees_east\"}") != 0) return NULL;
+
+    /* Write longitude data in multiple chunks */
+    double *lon_data = malloc(n_nodes * sizeof(double));
+    if (!lon_data) return NULL;
+    for (int i = 0; i < n_nodes; i++) {
+        lon_data[i] = -180.0 + 360.0 * i / (n_nodes - 1);
+    }
+
+    for (int c = 0; c < n_coord_chunks; c++) {
+        int start = c * coord_chunk_size;
+        int count = coord_chunk_size;
+        if (start + count > n_nodes) count = n_nodes - start;
+
+        char chunk_name[32];
+        snprintf(chunk_name, sizeof(chunk_name), "%d", c);
+        if (write_zarr_chunk(store_path, "longitude", chunk_name,
+                            &lon_data[start], count * sizeof(double)) != 0) {
+            free(lon_data);
+            return NULL;
+        }
+    }
+    free(lon_data);
+
+    /* Create time array directory */
+    snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_time[1024];
+    snprintf(zarray_time, sizeof(zarray_time),
+             "{"
+             "\"chunks\":[%d],"
+             "\"compressor\":null,"
+             "\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\","
+             "\"filters\":null,"
+             "\"order\":\"C\","
+             "\"shape\":[%d],"
+             "\"zarr_format\":2"
+             "}",
+             n_times, n_times);
+    if (write_zarr_file(store_path, "time/.zarray", zarray_time) != 0) return NULL;
+    if (write_zarr_file(store_path, "time/.zattrs", "{\"units\":\"days since 2000-01-01\"}") != 0) return NULL;
+
+    double *time_data = malloc(n_times * sizeof(double));
+    if (!time_data) return NULL;
+    for (int t = 0; t < n_times; t++) {
+        time_data[t] = t;
+    }
+    if (write_zarr_chunk(store_path, "time", "0", time_data, n_times * sizeof(double)) != 0) {
+        free(time_data);
+        return NULL;
+    }
+    free(time_data);
+
+    /* Create data variable (temperature) with multiple spatial chunks */
+    snprintf(array_dir, sizeof(array_dir), "%s/temperature", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_data[1024];
+    snprintf(zarray_data, sizeof(zarray_data),
+             "{"
+             "\"chunks\":[%d,%d],"
+             "\"compressor\":null,"
+             "\"dtype\":\"<f4\","
+             "\"fill_value\":1e20,"
+             "\"filters\":null,"
+             "\"order\":\"C\","
+             "\"shape\":[%d,%d],"
+             "\"zarr_format\":2"
+             "}",
+             time_chunk_size, spatial_chunk_size, n_times, n_nodes);
+    if (write_zarr_file(store_path, "temperature/.zarray", zarray_data) != 0) return NULL;
+
+    char zattrs_data[256];
+    snprintf(zattrs_data, sizeof(zattrs_data),
+             "{\"units\":\"K\",\"long_name\":\"Temperature\",\"_ARRAY_DIMENSIONS\":[\"time\",\"ncells\"]}");
+    if (write_zarr_file(store_path, "temperature/.zattrs", zattrs_data) != 0) return NULL;
+
+    /* Write data chunks - multiple time and spatial chunks */
+    int n_time_chunks = (n_times + time_chunk_size - 1) / time_chunk_size;
+    int n_spatial_chunks = (n_nodes + spatial_chunk_size - 1) / spatial_chunk_size;
+
+    for (int tc = 0; tc < n_time_chunks; tc++) {
+        int t_start = tc * time_chunk_size;
+        int t_count = time_chunk_size;
+        if (t_start + t_count > n_times) t_count = n_times - t_start;
+
+        for (int sc = 0; sc < n_spatial_chunks; sc++) {
+            int s_start = sc * spatial_chunk_size;
+            int s_count = spatial_chunk_size;
+            if (s_start + s_count > n_nodes) s_count = n_nodes - s_start;
+
+            /* Allocate chunk data */
+            float *chunk_data = malloc(t_count * s_count * sizeof(float));
+            if (!chunk_data) return NULL;
+
+            /* Fill with test data: value encodes both position and time */
+            for (int t = 0; t < t_count; t++) {
+                for (int s = 0; s < s_count; s++) {
+                    int global_t = t_start + t;
+                    int global_s = s_start + s;
+                    double lat = -90.0 + 180.0 * global_s / (n_nodes - 1);
+                    chunk_data[t * s_count + s] = 273.0f + (float)lat * 0.5f + (float)global_t * 0.1f;
+                }
+            }
+
+            char chunk_name[64];
+            snprintf(chunk_name, sizeof(chunk_name), "%d.%d", tc, sc);
+            if (write_zarr_chunk(store_path, "temperature", chunk_name,
+                                chunk_data, t_count * s_count * sizeof(float)) != 0) {
+                free(chunk_data);
+                return NULL;
+            }
+            free(chunk_data);
+        }
+    }
+
+    return store_path;
+}
+
+/* Test multi-chunk coordinate loading */
+TEST(multichunk_coordinates) {
+    /* Create store with 100 nodes split into 4 chunks of 30 each (last chunk has 10) */
+    const char *store_path = create_multichunk_zarr_store(100, 30, 3, 1, 100);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    /* Verify all 100 points were loaded */
+    ASSERT_EQ_SIZET(mesh->n_points, 100);
+
+    /* Check coordinate values span expected range */
+    double min_lat = 1e10, max_lat = -1e10;
+    double min_lon = 1e10, max_lon = -1e10;
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        if (mesh->lat[i] < min_lat) min_lat = mesh->lat[i];
+        if (mesh->lat[i] > max_lat) max_lat = mesh->lat[i];
+        if (mesh->lon[i] < min_lon) min_lon = mesh->lon[i];
+        if (mesh->lon[i] > max_lon) max_lon = mesh->lon[i];
+    }
+
+    /* Latitude should span -90 to 90 */
+    ASSERT_NEAR(min_lat, -90.0, 1.0);
+    ASSERT_NEAR(max_lat, 90.0, 1.0);
+
+    /* Longitude should span -180 to 180 */
+    ASSERT_NEAR(min_lon, -180.0, 2.0);
+    ASSERT_NEAR(max_lon, 180.0, 2.0);
+
+    /* Verify coordinates are monotonically increasing (not garbage from unread chunks) */
+    for (size_t i = 1; i < mesh->n_points; i++) {
+        ASSERT_GT(mesh->lat[i], mesh->lat[i-1]);
+    }
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test multi-chunk data reading */
+TEST(multichunk_data_reading) {
+    /* Create store with 100 nodes, spatial chunks of 30, 5 time steps, time chunks of 2 */
+    const char *store_path = create_multichunk_zarr_store(100, 30, 5, 2, 30);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find temperature variable */
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temperature") == 0) {
+            temp = v;
+            break;
+        }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    /* Read data and verify all spatial chunks are combined correctly */
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    int status = zarr_read_slice(temp, 0, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Verify data at different positions (from different spatial chunks) */
+    /* Point 0 (chunk 0): lat=-90, expect ~273 + (-90)*0.5 = 228 */
+    ASSERT_NEAR(data[0], 228.0f, 1.0f);
+
+    /* Point 50 (chunk 1): lat ≈ 0.9, expect ~273 + 0.9*0.5 ≈ 273.45 */
+    ASSERT_NEAR(data[50], 273.45f, 1.0f);
+
+    /* Point 99 (chunk 3): lat=90, expect ~273 + 90*0.5 = 318 */
+    ASSERT_NEAR(data[99], 318.0f, 1.0f);
+
+    /* Read different time step and verify time dimension is working */
+    status = zarr_read_slice(temp, 4, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Point 50, time 4: expect ~273 + 0.9*0.5 + 4*0.1 ≈ 273.85 */
+    ASSERT_NEAR(data[50], 273.85f, 0.1f);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test reading from last (partial) chunk */
+TEST(multichunk_last_chunk) {
+    /* Create store where last chunk is smaller than chunk size */
+    /* 100 nodes with chunk size 33 = 4 chunks (33, 33, 33, 1) */
+    const char *store_path = create_multichunk_zarr_store(100, 33, 2, 1, 33);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    /* All 100 points should be loaded despite partial last chunk */
+    ASSERT_EQ_SIZET(mesh->n_points, 100);
+
+    /* Last coordinate should be valid, not garbage */
+    ASSERT_NEAR(mesh->lat[99], 90.0, 1.0);
+    ASSERT_NEAR(mesh->lon[99], 180.0, 2.0);
+
+    /* Read data and check last point (from partial chunk) */
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temperature") == 0) {
+            temp = v;
+            break;
+        }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    int status = zarr_read_slice(temp, 0, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Last point should have valid data */
+    ASSERT_GT(data[99], 200.0f);
+    ASSERT_LT(data[99], 400.0f);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
 /* ---- Multi-file zarr tests ---- */
 
 /*

@@ -198,6 +198,7 @@ The test suite includes:
   - Reads coordinates from embedded latitude/longitude arrays
   - Dimension metadata via `_ARRAY_DIMENSIONS` attribute (xarray convention)
   - Multi-file time concatenation supported via glob patterns
+  - Supports multi-chunk arrays (coordinates and data can be split across multiple chunks)
 
 ## Coordinate Detection
 

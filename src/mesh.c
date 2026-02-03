@@ -347,7 +347,7 @@ static cJSON *mesh_read_json(const char *path) {
     return json;
 }
 
-/* Read and decompress a zarr coordinate array */
+/* Read and decompress a zarr coordinate array (handles multi-chunk arrays) */
 static double *read_zarr_coord(const char *base_path, const char *coord_name,
                                 size_t *n_points_out) {
     char coord_path[PATH_MAX];
@@ -372,6 +372,16 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
     size_t n_points = (size_t)cJSON_GetArrayItem(shape, 0)->valuedouble;
     *n_points_out = n_points;
 
+    /* Get chunk size */
+    cJSON *chunks = cJSON_GetObjectItem(zarray, "chunks");
+    size_t chunk_size = n_points;  /* Default: single chunk */
+    if (chunks && cJSON_IsArray(chunks) && cJSON_GetArraySize(chunks) >= 1) {
+        chunk_size = (size_t)cJSON_GetArrayItem(chunks, 0)->valuedouble;
+    }
+
+    /* Calculate number of chunks */
+    size_t n_chunks = (n_points + chunk_size - 1) / chunk_size;
+
     /* Get dtype */
     cJSON *dtype_obj = cJSON_GetObjectItem(zarray, "dtype");
     const char *dtype_str = dtype_obj ? dtype_obj->valuestring : "<f8";
@@ -392,59 +402,112 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
         }
     }
 
-    /* Read chunk file */
-    char chunk_path[PATH_MAX];
-    snprintf(chunk_path, sizeof(chunk_path), "%s/0", coord_path);
-
-    size_t comp_size;
-    void *compressed = mesh_read_file(chunk_path, &comp_size);
-    if (!compressed) {
-        fprintf(stderr, "Failed to read chunk: %s\n", chunk_path);
+    /* Allocate buffer for all raw data */
+    size_t total_raw_size = n_points * dtype_size;
+    void *raw_data = malloc(total_raw_size);
+    if (!raw_data) {
         cJSON_Delete(zarray);
         return NULL;
     }
 
-    /* Decompress */
-    size_t expected_size = n_points * dtype_size;
-    void *raw_data = NULL;
+    /* Read and decompress each chunk */
+    size_t offset = 0;
+    for (size_t chunk_idx = 0; chunk_idx < n_chunks; chunk_idx++) {
+        char chunk_path[PATH_MAX];
+        snprintf(chunk_path, sizeof(chunk_path), "%s/%zu", coord_path, chunk_idx);
 
-    if (!compressor_id) {
-        /* No compression */
-        raw_data = compressed;
-    } else if (strcmp(compressor_id, "lz4") == 0) {
-        raw_data = malloc(expected_size);
-        if (raw_data) {
+        size_t comp_size;
+        void *compressed = mesh_read_file(chunk_path, &comp_size);
+        if (!compressed) {
+            fprintf(stderr, "Failed to read chunk: %s\n", chunk_path);
+            free(raw_data);
+            cJSON_Delete(zarray);
+            return NULL;
+        }
+
+        /* Calculate this chunk's actual size (last chunk may be smaller) */
+        size_t remaining = n_points - offset;
+        size_t this_chunk_points = (remaining < chunk_size) ? remaining : chunk_size;
+        size_t this_chunk_bytes = this_chunk_points * dtype_size;
+
+        /* Decompress into the correct offset */
+        void *chunk_dest = (char *)raw_data + offset * dtype_size;
+
+        if (!compressor_id) {
+            /* No compression */
+            memcpy(chunk_dest, compressed, this_chunk_bytes);
+            free(compressed);
+        } else if (strcmp(compressor_id, "lz4") == 0) {
+            if (comp_size < 4) {
+                fprintf(stderr, "LZ4 chunk too small: %s\n", chunk_path);
+                free(compressed);
+                free(raw_data);
+                cJSON_Delete(zarray);
+                return NULL;
+            }
             uint32_t uncomp_size = *(uint32_t *)compressed;
             int result = LZ4_decompress_safe((const char *)compressed + 4,
-                                             raw_data,
+                                             chunk_dest,
                                              (int)(comp_size - 4),
                                              (int)uncomp_size);
+            free(compressed);
             if (result < 0) {
-                fprintf(stderr, "LZ4 decompression failed for %s\n", coord_name);
+                fprintf(stderr, "LZ4 decompression failed for %s chunk %zu\n",
+                        coord_name, chunk_idx);
                 free(raw_data);
-                raw_data = NULL;
+                cJSON_Delete(zarray);
+                return NULL;
             }
-        }
-        free(compressed);
-    } else if (strcmp(compressor_id, "blosc") == 0) {
-        raw_data = malloc(expected_size);
-        if (raw_data) {
-            int result = blosc_decompress(compressed, raw_data, expected_size);
-            if (result < 0) {
-                fprintf(stderr, "Blosc decompression failed for %s\n", coord_name);
-                free(raw_data);
-                raw_data = NULL;
+        } else if (strcmp(compressor_id, "blosc") == 0) {
+            /* Get actual uncompressed size from blosc header */
+            size_t nbytes, cbytes, blocksize;
+            blosc_cbuffer_sizes(compressed, &nbytes, &cbytes, &blocksize);
+
+            /* Decompress to temp buffer if chunk is larger than needed (last chunk case) */
+            if (nbytes > this_chunk_bytes) {
+                void *temp = malloc(nbytes);
+                if (!temp) {
+                    free(compressed);
+                    free(raw_data);
+                    cJSON_Delete(zarray);
+                    return NULL;
+                }
+                int result = blosc_decompress(compressed, temp, nbytes);
+                free(compressed);
+                if (result < 0) {
+                    fprintf(stderr, "Blosc decompression failed for %s chunk %zu\n",
+                            coord_name, chunk_idx);
+                    free(temp);
+                    free(raw_data);
+                    cJSON_Delete(zarray);
+                    return NULL;
+                }
+                /* Copy only the needed portion */
+                memcpy(chunk_dest, temp, this_chunk_bytes);
+                free(temp);
+            } else {
+                int result = blosc_decompress(compressed, chunk_dest, nbytes);
+                free(compressed);
+                if (result < 0) {
+                    fprintf(stderr, "Blosc decompression failed for %s chunk %zu\n",
+                            coord_name, chunk_idx);
+                    free(raw_data);
+                    cJSON_Delete(zarray);
+                    return NULL;
+                }
             }
+        } else {
+            fprintf(stderr, "Unknown compressor: %s\n", compressor_id);
+            free(compressed);
+            free(raw_data);
+            cJSON_Delete(zarray);
+            return NULL;
         }
-        free(compressed);
-    } else {
-        fprintf(stderr, "Unknown compressor: %s\n", compressor_id);
-        free(compressed);
+
+        offset += this_chunk_points;
     }
 
     cJSON_Delete(zarray);
-
-    if (!raw_data) return NULL;
 
     /* Convert to double array */
     double *result = malloc(n_points * sizeof(double));

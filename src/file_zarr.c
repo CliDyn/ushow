@@ -527,7 +527,7 @@ static void *zarr_read_chunk(const char *chunk_path, ZarrArray *za, size_t expec
 }
 
 /*
- * Read a 2D slice from zarr variable
+ * Read a 2D slice from zarr variable (handles multi-chunk spatial dimensions)
  */
 int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data) {
     if (!var || !var->zarr_data || !data) return -1;
@@ -535,7 +535,7 @@ int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data) 
     ZarrArray *za = (ZarrArray *)var->zarr_data;
     size_t n_points = var->mesh->n_points;
 
-    /* Determine chunk indices */
+    /* Determine time/depth chunk indices */
     size_t time_chunk = 0, depth_chunk = 0;
     size_t local_time = time_idx, local_depth = depth_idx;
 
@@ -548,72 +548,103 @@ int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data) 
         local_depth = depth_idx % za->chunks[var->depth_dim_id];
     }
 
-    /* Build chunk filename */
-    char chunk_path[PATH_MAX];
-    char chunk_key[256] = "";
-
+    /* Find spatial dimension (not time, not depth) */
+    int spatial_dim = -1;
     for (int d = 0; d < za->ndim; d++) {
-        char part[32];
-        size_t chunk_idx;
-
-        if (d == var->time_dim_id) {
-            chunk_idx = time_chunk;
-        } else if (d == var->depth_dim_id) {
-            chunk_idx = depth_chunk;
-        } else {
-            chunk_idx = 0;  /* Spatial dimension assumed to be in single chunk */
+        if (d != var->time_dim_id && d != var->depth_dim_id) {
+            spatial_dim = d;
+            break;
         }
-
-        if (d > 0) strcat(chunk_key, ".");
-        snprintf(part, sizeof(part), "%zu", chunk_idx);
-        strcat(chunk_key, part);
     }
 
-    snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
+    if (spatial_dim < 0) {
+        fprintf(stderr, "Could not identify spatial dimension\n");
+        return -1;
+    }
 
-    /* Calculate expected uncompressed size */
+    /* Calculate number of spatial chunks */
+    size_t spatial_shape = za->shape[spatial_dim];
+    size_t spatial_chunk_size = za->chunks[spatial_dim];
+    size_t n_spatial_chunks = (spatial_shape + spatial_chunk_size - 1) / spatial_chunk_size;
+
+    /* Calculate expected uncompressed size per chunk */
     size_t chunk_elements = 1;
     for (int d = 0; d < za->ndim; d++) {
         chunk_elements *= za->chunks[d];
     }
     size_t expected_size = chunk_elements * za->dtype_size;
 
-    /* Read chunk */
-    void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
-    if (!chunk_data) return -1;
+    /* Read all spatial chunks and combine */
+    size_t output_offset = 0;
 
-    /* Extract the slice we need */
-    /* For shape [time, values] with chunks [1, n], each chunk has exactly one time slice */
-    size_t slice_offset = 0;
+    for (size_t spatial_chunk = 0; spatial_chunk < n_spatial_chunks; spatial_chunk++) {
+        /* Build chunk filename */
+        char chunk_path[PATH_MAX];
+        char chunk_key[256] = "";
 
-    /* Calculate offset within chunk for our time/depth indices */
-    if (var->time_dim_id >= 0 && var->time_dim_id == 0) {
-        slice_offset = local_time * za->chunks[1];
-    }
+        for (int d = 0; d < za->ndim; d++) {
+            char part[32];
+            size_t chunk_idx;
 
-    /* Copy and convert to float */
-    if (za->dtype == 'f' && za->dtype_size == 4) {
-        /* Already float32 */
-        memcpy(data, (char *)chunk_data + slice_offset * sizeof(float), n_points * sizeof(float));
-    } else if (za->dtype == 'd') {
-        /* Double to float */
-        double *src = (double *)((char *)chunk_data + slice_offset * sizeof(double));
-        for (size_t i = 0; i < n_points; i++) {
-            data[i] = (float)src[i];
+            if (d == var->time_dim_id) {
+                chunk_idx = time_chunk;
+            } else if (d == var->depth_dim_id) {
+                chunk_idx = depth_chunk;
+            } else {
+                chunk_idx = spatial_chunk;
+            }
+
+            if (d > 0) strcat(chunk_key, ".");
+            snprintf(part, sizeof(part), "%zu", chunk_idx);
+            strcat(chunk_key, part);
         }
-    } else if (za->dtype == 'i' && za->dtype_size == 8) {
-        /* Int64 to float */
-        int64_t *src = (int64_t *)((char *)chunk_data + slice_offset * sizeof(int64_t));
-        for (size_t i = 0; i < n_points; i++) {
-            data[i] = (float)src[i];
+
+        snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
+
+        /* Read chunk */
+        void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
+        if (!chunk_data) return -1;
+
+        /* Calculate how many points to copy from this chunk */
+        size_t remaining = n_points - output_offset;
+        size_t points_in_chunk = (remaining < spatial_chunk_size) ? remaining : spatial_chunk_size;
+
+        /* Calculate offset within chunk for our time index */
+        size_t slice_offset = 0;
+        if (var->time_dim_id >= 0 && var->time_dim_id < spatial_dim) {
+            /* Time dimension comes before spatial: offset = local_time * spatial_chunk_size */
+            slice_offset = local_time * spatial_chunk_size;
         }
-    } else {
-        fprintf(stderr, "Unsupported dtype: %c (size %d)\n", za->dtype, za->dtype_size);
+        (void)local_depth;  /* Not used in current 2D slice logic */
+
+        /* Copy and convert to float */
+        if (za->dtype == 'f' && za->dtype_size == 4) {
+            /* Already float32 */
+            memcpy(data + output_offset,
+                   (char *)chunk_data + slice_offset * sizeof(float),
+                   points_in_chunk * sizeof(float));
+        } else if (za->dtype == 'd') {
+            /* Double to float */
+            double *src = (double *)((char *)chunk_data + slice_offset * sizeof(double));
+            for (size_t i = 0; i < points_in_chunk; i++) {
+                data[output_offset + i] = (float)src[i];
+            }
+        } else if (za->dtype == 'i' && za->dtype_size == 8) {
+            /* Int64 to float */
+            int64_t *src = (int64_t *)((char *)chunk_data + slice_offset * sizeof(int64_t));
+            for (size_t i = 0; i < points_in_chunk; i++) {
+                data[output_offset + i] = (float)src[i];
+            }
+        } else {
+            fprintf(stderr, "Unsupported dtype: %c (size %d)\n", za->dtype, za->dtype_size);
+            free(chunk_data);
+            return -1;
+        }
+
         free(chunk_data);
-        return -1;
+        output_offset += points_in_chunk;
     }
 
-    free(chunk_data);
     return 0;
 }
 
@@ -889,12 +920,35 @@ static void *zarr_decompress(const void *compressed, size_t comp_size,
             return NULL;
         }
     } else if (strcmp(za->compressor_id, "blosc") == 0) {
-        /* Blosc handles its own header */
-        int result = blosc_decompress(compressed, output, expected_size);
-        if (result < 0) {
-            fprintf(stderr, "Blosc decompression failed: %d\n", result);
-            free(output);
-            return NULL;
+        /* Get actual uncompressed size from blosc header */
+        size_t nbytes, cbytes, blocksize;
+        blosc_cbuffer_sizes(compressed, &nbytes, &cbytes, &blocksize);
+
+        /* If actual size differs from expected, decompress to temp buffer */
+        if (nbytes != expected_size) {
+            void *temp = malloc(nbytes);
+            if (!temp) {
+                free(output);
+                return NULL;
+            }
+            int result = blosc_decompress(compressed, temp, nbytes);
+            if (result < 0) {
+                fprintf(stderr, "Blosc decompression failed: %d\n", result);
+                free(temp);
+                free(output);
+                return NULL;
+            }
+            /* Copy what we need (min of actual and expected) */
+            size_t copy_size = (nbytes < expected_size) ? nbytes : expected_size;
+            memcpy(output, temp, copy_size);
+            free(temp);
+        } else {
+            int result = blosc_decompress(compressed, output, expected_size);
+            if (result < 0) {
+                fprintf(stderr, "Blosc decompression failed: %d\n", result);
+                free(output);
+                return NULL;
+            }
         }
     } else {
         fprintf(stderr, "Unknown compressor: %s\n", za->compressor_id);
