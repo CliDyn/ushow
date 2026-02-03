@@ -199,7 +199,7 @@ void colormap_apply(const USColormap *cmap, const float *data,
             float v = data[src_idx];
 
             /* Check for fill value or NaN */
-            if (fabsf(v) > 1e10f || v != v ||
+            if (fabsf(v) > INVALID_DATA_THRESHOLD || v != v ||
                 fabsf(v - fill_value) < 1e-6f * fabsf(fill_value)) {
                 /* Missing data: draw as white */
                 pixels[dst_idx * 3 + 0] = 255;
@@ -242,7 +242,7 @@ void colormap_apply_scaled(const USColormap *cmap, const float *data,
             unsigned char r, g, b;
 
             /* Check for fill value or NaN */
-            if (fabsf(v) > 1e10f || v != v ||
+            if (fabsf(v) > INVALID_DATA_THRESHOLD || v != v ||
                 fabsf(v - fill_value) < 1e-6f * fabsf(fill_value)) {
                 /* Missing data: draw as white */
                 r = g = b = 255;

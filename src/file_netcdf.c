@@ -370,7 +370,7 @@ int netcdf_estimate_range(USVar *var, float *min_val, float *max_val) {
         for (size_t i = 0; i < n_points; i++) {
             float v = data[i];
             /* Skip fill values */
-            if (fabsf(v) > 1e10f) continue;
+            if (fabsf(v) > INVALID_DATA_THRESHOLD) continue;
             if (fabsf(v - var->fill_value) < 1e-6f * fabsf(var->fill_value)) continue;
 
             if (v < global_min) global_min = v;

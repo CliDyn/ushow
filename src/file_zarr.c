@@ -673,8 +673,8 @@ int zarr_estimate_range(USVar *var, float *min_val, float *max_val) {
 
         for (size_t i = 0; i < n_points; i++) {
             float v = data[i];
-            if (!isfinite(v)) continue;
-            if (fabsf(v) > 1e10f) continue;
+            if (v != v) continue;  /* NaN check */
+            if (fabsf(v) > INVALID_DATA_THRESHOLD) continue;
 
             if (v < global_min) global_min = v;
             if (v > global_max) global_max = v;

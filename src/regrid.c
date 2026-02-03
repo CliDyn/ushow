@@ -114,7 +114,7 @@ void regrid_apply(const USRegrid *regrid, const float *source_data,
         if (regrid->valid_mask[i]) {
             float value = source_data[regrid->nn_indices[i]];
             /* Check for source fill value (very large values) */
-            if (fabsf(value) < 1e10f) {
+            if (fabsf(value) < INVALID_DATA_THRESHOLD) {
                 target_data[i] = value;
             } else {
                 target_data[i] = fill_value;

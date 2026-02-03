@@ -25,6 +25,9 @@
 /* Fill value for missing data */
 #define DEFAULT_FILL_VALUE  1.0e20f
 
+/* Threshold for invalid data detection (close to FLT_MAX ~ 3.4e38) */
+#define INVALID_DATA_THRESHOLD  1e37f
+
 /* Maximum variables */
 #define MAX_VARS            256
 #define MAX_DIMS            10
