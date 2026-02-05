@@ -8,6 +8,7 @@
 
 #include "x_interface.h"
 #include "colorbar.h"
+#include <X11/Xlib.h>
 #include <X11/Intrinsic.h>
 #include <X11/StringDefs.h>
 #include <X11/Shell.h>

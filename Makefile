@@ -30,7 +30,9 @@ DKRZ_ICE := /sw/spack-levante/libice-1.0.9-2v7j4q
 DKRZ_XMU := /sw/spack-levante/libxmu-1.1.2-4spgxo
 DKRZ_XEXT := /sw/spack-levante/libxext-1.3.3-o4dpxe
 
-X11_CFLAGS := $(shell pkg-config --cflags x11 xt xaw7 2>/dev/null)
+X11_PKG_CFLAGS := $(shell pkg-config --cflags x11 xt xaw7 2>/dev/null)
+X11_PKG_INCLUDEDIR := $(shell pkg-config --variable=includedir x11 2>/dev/null)
+X11_CFLAGS := $(if $(X11_PKG_INCLUDEDIR),-I$(X11_PKG_INCLUDEDIR),) $(X11_PKG_CFLAGS)
 X11_LIBS := $(shell pkg-config --libs x11 xt xaw7 2>/dev/null)
 ifeq ($(X11_CFLAGS),)
   ifdef X11_PREFIX
@@ -60,8 +62,12 @@ else
   endif
 endif
 
-CFLAGS += $(NETCDF_CFLAGS) $(X11_CFLAGS)
-LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) $(X11_LIBS) $(X11_RPATH) -lm
+BASE_CFLAGS = $(CFLAGS) $(NETCDF_CFLAGS)
+X11_FULL_CFLAGS = $(X11_CFLAGS) $(BASE_CFLAGS)
+
+COMMON_LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) -lm
+USHOW_LIBS = $(COMMON_LIBS) $(X11_LIBS) $(X11_RPATH)
+UTERM_LIBS = $(COMMON_LIBS)
 
 # Zarr support (optional) - build with: make WITH_ZARR=1
 # Requires: c-blosc and lz4 (brew install c-blosc lz4 on macOS)
@@ -87,8 +93,10 @@ endif
 
 ZARR_CFLAGS := -DHAVE_ZARR -I$(BLOSC_PREFIX)/include -I$(LZ4_PREFIX)/include
 ZARR_LIBS := -L$(BLOSC_LIBDIR) -L$(LZ4_LIBDIR) -lblosc -llz4 $(ZARR_RPATH)
-CFLAGS += $(ZARR_CFLAGS)
-LIBS += $(ZARR_LIBS)
+BASE_CFLAGS += $(ZARR_CFLAGS)
+X11_FULL_CFLAGS += $(ZARR_CFLAGS)
+USHOW_LIBS += $(ZARR_LIBS)
+UTERM_LIBS += $(ZARR_LIBS)
 endif
 
 # Directories
@@ -96,32 +104,38 @@ SRCDIR = src
 OBJDIR = obj
 BINDIR = .
 
-# Sources
-SRCS = $(SRCDIR)/ushow.c \
-       $(SRCDIR)/kdtree.c \
-       $(SRCDIR)/mesh.c \
-       $(SRCDIR)/regrid.c \
-       $(SRCDIR)/file_netcdf.c \
-       $(SRCDIR)/colormaps.c \
-       $(SRCDIR)/view.c \
-       $(SRCDIR)/interface/x_interface.c \
-       $(SRCDIR)/interface/colorbar.c
+COMMON_SRCS = $(SRCDIR)/kdtree.c \
+              $(SRCDIR)/mesh.c \
+              $(SRCDIR)/regrid.c \
+              $(SRCDIR)/file_netcdf.c \
+              $(SRCDIR)/colormaps.c \
+              $(SRCDIR)/view.c
 
-# Objects
-OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+USHOW_SRCS = $(SRCDIR)/ushow.c \
+             $(COMMON_SRCS) \
+             $(SRCDIR)/interface/x_interface.c \
+             $(SRCDIR)/interface/colorbar.c
+
+UTERM_SRCS = $(SRCDIR)/uterm.c \
+             $(COMMON_SRCS)
 
 # Add zarr sources if enabled
 ifdef WITH_ZARR
-SRCS += $(SRCDIR)/file_zarr.c
-OBJS += $(OBJDIR)/file_zarr.o $(OBJDIR)/cJSON/cJSON.o
+COMMON_SRCS += $(SRCDIR)/file_zarr.c
+USHOW_SRCS += $(SRCDIR)/cJSON/cJSON.c
+UTERM_SRCS += $(SRCDIR)/cJSON/cJSON.c
 endif
 
-# Target
-TARGET = $(BINDIR)/ushow
+USHOW_OBJS = $(USHOW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+UTERM_OBJS = $(UTERM_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+
+# Targets
+TARGET = ushow
+UTERM_TARGET = uterm
 
 .PHONY: all clean dirs test test-clean
 
-all: dirs $(TARGET)
+all: dirs $(TARGET) $(UTERM_TARGET)
 
 dirs:
 	@mkdir -p $(OBJDIR)
@@ -131,28 +145,36 @@ ifdef WITH_ZARR
 	@mkdir -p $(OBJDIR)/cJSON
 endif
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+$(TARGET): $(USHOW_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(USHOW_LIBS)
 	@echo "Built $(TARGET)"
 
+$(UTERM_TARGET): $(UTERM_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(UTERM_LIBS)
+	@echo "Built $(UTERM_TARGET)"
+
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
-	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
+	$(CC) $(BASE_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 $(OBJDIR)/interface/%.o: $(SRCDIR)/interface/%.c
-	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
+	$(CC) $(X11_FULL_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 # cJSON object file (zarr support)
 $(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c
-	$(CC) $(CFLAGS) -I$(SRCDIR) -c -o $@ $<
+	$(CC) $(BASE_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 clean:
 	rm -rf $(OBJDIR)
-	rm -f $(TARGET)
+	rm -f ushow
+	rm -f uterm
 
 # Dependencies
 $(OBJDIR)/ushow.o: $(SRCDIR)/ushow.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h \
                    $(SRCDIR)/regrid.h $(SRCDIR)/file_netcdf.h $(SRCDIR)/colormaps.h \
                    $(SRCDIR)/view.h $(SRCDIR)/interface/x_interface.h
+$(OBJDIR)/uterm.o: $(SRCDIR)/uterm.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h \
+                   $(SRCDIR)/regrid.h $(SRCDIR)/file_netcdf.h $(SRCDIR)/colormaps.h \
+                   $(SRCDIR)/view.h
 $(OBJDIR)/kdtree.o: $(SRCDIR)/kdtree.c $(SRCDIR)/kdtree.h
 $(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/regrid.o: $(SRCDIR)/regrid.c $(SRCDIR)/regrid.h $(SRCDIR)/mesh.h \
@@ -177,10 +199,10 @@ endif
 # Print configuration
 info:
 	@echo "CC: $(CC)"
-	@echo "CFLAGS: $(CFLAGS)"
-	@echo "LIBS: $(LIBS)"
-	@echo "SRCS: $(SRCS)"
-	@echo "OBJS: $(OBJS)"
+	@echo "BASE_CFLAGS: $(BASE_CFLAGS)"
+	@echo "X11_FULL_CFLAGS: $(X11_FULL_CFLAGS)"
+	@echo "USHOW_LIBS: $(USHOW_LIBS)"
+	@echo "UTERM_LIBS: $(UTERM_LIBS)"
 
 # Test targets
 test:
