@@ -32,6 +32,10 @@
 #define MIN_DRAW_COLS 20
 #define MIN_DRAW_ROWS 6
 #define DEFAULT_GLYPH_RAMP " .:-=+*#%@"
+#define CP_BRAILLE_BASE 0x2800
+#define CP_UPPER_HALF_BLOCK 0x2580
+#define CP_LOWER_HALF_BLOCK 0x2584
+#define CP_FULL_BLOCK 0x2588
 
 /* Global state */
 static USFile *file = NULL;
@@ -54,6 +58,7 @@ typedef struct {
     double target_resolution;
     int frame_delay_ms;
     int color_mode;      /* -1 auto, 0 off, 1 on */
+    int render_mode;     /* 0=ascii, 1=half, 2=braille */
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
 } UTermOptions;
@@ -63,6 +68,7 @@ static UTermOptions options = {
     .target_resolution = DEFAULT_RESOLUTION,
     .frame_delay_ms = 200,
     .color_mode = -1,
+    .render_mode = 0,
     .mesh_file = "",
     .glyph_ramp = DEFAULT_GLYPH_RAMP
 };
@@ -151,6 +157,73 @@ static float clamp01(float v) {
     return v;
 }
 
+static const char *render_mode_name(int mode) {
+    switch (mode) {
+        case 1: return "half";
+        case 2: return "braille";
+        case 0:
+        default:
+            return "ascii";
+    }
+}
+
+static int parse_render_mode(const char *s, int *mode_out) {
+    if (!s || !mode_out) return -1;
+    if (strcmp(s, "ascii") == 0) {
+        *mode_out = 0;
+        return 0;
+    }
+    if (strcmp(s, "half") == 0 || strcmp(s, "half-block") == 0 || strcmp(s, "halfblock") == 0) {
+        *mode_out = 1;
+        return 0;
+    }
+    if (strcmp(s, "braille") == 0) {
+        *mode_out = 2;
+        return 0;
+    }
+    return -1;
+}
+
+static void cycle_render_mode(void) {
+    options.render_mode = (options.render_mode + 1) % 3;
+}
+
+static void print_utf8_codepoint(unsigned int cp) {
+    char out[4];
+    if (cp <= 0x7F) {
+        out[0] = (char)cp;
+        fwrite(out, 1, 1, stdout);
+    } else if (cp <= 0x7FF) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        fwrite(out, 1, 2, stdout);
+    } else {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        fwrite(out, 1, 3, stdout);
+    }
+}
+
+static int sample_field(size_t sx, size_t sy, size_t sub_cols, size_t sub_rows,
+                        float range, float *norm_out) {
+    if (!view || !current_var || sub_cols == 0 || sub_rows == 0 || !norm_out) return 1;
+
+    size_t data_x = (size_t)(((double)sx + 0.5) * (double)view->data_nx / (double)sub_cols);
+    size_t data_y = (size_t)(((double)sy + 0.5) * (double)view->data_ny / (double)sub_rows);
+    if (data_x >= view->data_nx) data_x = view->data_nx - 1;
+    if (data_y >= view->data_ny) data_y = view->data_ny - 1;
+
+    size_t src_y = view->data_ny - 1 - data_y;
+    size_t idx = src_y * view->data_nx + data_x;
+    float v = view->regridded_data[idx];
+
+    if (is_missing_value(v, current_var->fill_value)) return 1;
+
+    *norm_out = clamp01((v - current_var->user_min) / range);
+    return 0;
+}
+
 static void print_usage(const char *prog) {
     fprintf(stderr, "Usage: %s [options] <data_file.nc|data.zarr> [file2 ...]\n\n", prog);
     fprintf(stderr, "Options:\n");
@@ -159,6 +232,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay in ms (default: 200)\n");
     fprintf(stderr, "      --chars <ramp>     Glyph ramp, e.g. \" .:-=+*#%%@\"\n");
+    fprintf(stderr, "      --render <mode>    Render mode: ascii | half | braille\n");
     fprintf(stderr, "      --color            Force ANSI color output\n");
     fprintf(stderr, "      --no-color         Disable ANSI colors\n");
     fprintf(stderr, "  -h, --help             Show this help\n\n");
@@ -166,6 +240,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "Keys:\n");
     fprintf(stderr, "  q quit | space pause/resume | j/k time -/+ | u/i depth -/+\n");
     fprintf(stderr, "  n/p next/prev variable | c/C next/prev colormap\n");
+    fprintf(stderr, "  m cycle render mode (ascii/half/braille)\n");
     fprintf(stderr, "  [ / ] adjust min down/up | { / } adjust max down/up\n");
     fprintf(stderr, "  r reset range | s save PPM | ? toggle help\n");
 }
@@ -293,16 +368,16 @@ static void render_frame(int show_help, int animating) {
            animating ? "anim" : "paused");
 
     if (cmap) {
-        printf("cmap: %s | range: %.6g .. %.6g | color: %s\n",
+        printf("cmap: %s | range: %.6g .. %.6g | color: %s | render: %s\n",
                cmap->name, current_var->user_min, current_var->user_max,
-               use_color ? "on" : "off");
+               use_color ? "on" : "off", render_mode_name(options.render_mode));
     } else {
-        printf("cmap: none | range: %.6g .. %.6g | color: %s\n",
+        printf("cmap: none | range: %.6g .. %.6g | color: %s | render: %s\n",
                current_var->user_min, current_var->user_max,
-               use_color ? "on" : "off");
+               use_color ? "on" : "off", render_mode_name(options.render_mode));
     }
 
-    printf("keys: q quit | n/p var | j/k time | u/i depth | space play/pause | c/C cmap\n");
+    printf("keys: q quit | n/p var | j/k time | u/i depth | space play/pause | c/C cmap | m mode\n");
     if (show_help) {
         printf("      [ ] min-/min+  { } max-/max+  r reset range  s save ppm\n");
     } else {
@@ -312,53 +387,176 @@ static void render_frame(int show_help, int animating) {
     float range = current_var->user_max - current_var->user_min;
     if (range <= 0.0f) range = 1.0f;
 
-    for (int row = 0; row < draw_rows; row++) {
-        size_t data_y = (size_t)((double)row * (double)view->data_ny / (double)draw_rows);
-        if (data_y >= view->data_ny) data_y = view->data_ny - 1;
-        size_t src_y = view->data_ny - 1 - data_y;
+    if (options.render_mode == 0) {
+        for (int row = 0; row < draw_rows; row++) {
+            int last_r = -1, last_g = -1, last_b = -1;
 
-        int last_r = -1, last_g = -1, last_b = -1;
-
-        for (int col = 0; col < draw_cols; col++) {
-            size_t data_x = (size_t)((double)col * (double)view->data_nx / (double)draw_cols);
-            if (data_x >= view->data_nx) data_x = view->data_nx - 1;
-
-            size_t idx = src_y * view->data_nx + data_x;
-            float v = view->regridded_data[idx];
-
-            if (is_missing_value(v, current_var->fill_value)) {
-                if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
-                    printf("\x1b[0m");
-                    last_r = last_g = last_b = -1;
+            for (int col = 0; col < draw_cols; col++) {
+                float t = 0.0f;
+                if (sample_field((size_t)col, (size_t)row, (size_t)draw_cols, (size_t)draw_rows, range, &t) != 0) {
+                    if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
+                        printf("\x1b[0m");
+                        last_r = last_g = last_b = -1;
+                    }
+                    putchar(' ');
+                    continue;
                 }
-                putchar(' ');
-                continue;
+
+                int ridx = (int)(t * (float)(ramp_len - 1) + 0.5f);
+                if (ridx < 0) ridx = 0;
+                if (ridx >= ramp_len) ridx = ramp_len - 1;
+                char ch = ramp[ridx];
+
+                if (use_color && cmap) {
+                    unsigned char r, g, b;
+                    colormap_map_value(cmap, t, &r, &g, &b);
+                    if ((int)r != last_r || (int)g != last_g || (int)b != last_b) {
+                        printf("\x1b[38;2;%u;%u;%um", r, g, b);
+                        last_r = (int)r;
+                        last_g = (int)g;
+                        last_b = (int)b;
+                    }
+                }
+
+                putchar(ch);
             }
 
-            float t = clamp01((v - current_var->user_min) / range);
-            int ridx = (int)(t * (float)(ramp_len - 1) + 0.5f);
-            if (ridx < 0) ridx = 0;
-            if (ridx >= ramp_len) ridx = ramp_len - 1;
-            char ch = ramp[ridx];
+            if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
+                printf("\x1b[0m");
+            }
+            putchar('\n');
+        }
+    } else if (options.render_mode == 1) {
+        for (int row = 0; row < draw_rows; row++) {
+            int last_fr = -1, last_fg = -1, last_fb = -1;
+            int last_br = -1, last_bg = -1, last_bb = -1;
 
-            if (use_color && cmap) {
-                unsigned char r, g, b;
-                colormap_map_value(cmap, t, &r, &g, &b);
-                if ((int)r != last_r || (int)g != last_g || (int)b != last_b) {
-                    printf("\x1b[38;2;%u;%u;%um", r, g, b);
-                    last_r = (int)r;
-                    last_g = (int)g;
-                    last_b = (int)b;
+            for (int col = 0; col < draw_cols; col++) {
+                float top = 0.0f, bot = 0.0f;
+                int top_miss = sample_field((size_t)col, (size_t)(row * 2), (size_t)draw_cols, (size_t)(draw_rows * 2), range, &top);
+                int bot_miss = sample_field((size_t)col, (size_t)(row * 2 + 1), (size_t)draw_cols, (size_t)(draw_rows * 2), range, &bot);
+
+                if (top_miss && bot_miss) {
+                    if (use_color && (last_fr != -1 || last_br != -1)) {
+                        printf("\x1b[0m");
+                        last_fr = last_fg = last_fb = -1;
+                        last_br = last_bg = last_bb = -1;
+                    }
+                    putchar(' ');
+                    continue;
+                }
+
+                if (use_color && cmap) {
+                    unsigned char tr = 255, tg = 255, tb = 255;
+                    unsigned char br = 255, bg = 255, bb = 255;
+                    if (!top_miss) colormap_map_value(cmap, top, &tr, &tg, &tb);
+                    if (!bot_miss) colormap_map_value(cmap, bot, &br, &bg, &bb);
+
+                    if ((int)tr != last_fr || (int)tg != last_fg || (int)tb != last_fb ||
+                        (int)br != last_br || (int)bg != last_bg || (int)bb != last_bb) {
+                        printf("\x1b[38;2;%u;%u;%um\x1b[48;2;%u;%u;%um", tr, tg, tb, br, bg, bb);
+                        last_fr = (int)tr;
+                        last_fg = (int)tg;
+                        last_fb = (int)tb;
+                        last_br = (int)br;
+                        last_bg = (int)bg;
+                        last_bb = (int)bb;
+                    }
+                    print_utf8_codepoint(CP_UPPER_HALF_BLOCK);
+                } else {
+                    int top_on = (!top_miss && top >= 0.5f) ? 1 : 0;
+                    int bot_on = (!bot_miss && bot >= 0.5f) ? 1 : 0;
+
+                    if (top_on && bot_on) {
+                        print_utf8_codepoint(CP_FULL_BLOCK);
+                    } else if (top_on) {
+                        print_utf8_codepoint(CP_UPPER_HALF_BLOCK);
+                    } else if (bot_on) {
+                        print_utf8_codepoint(CP_LOWER_HALF_BLOCK);
+                    } else {
+                        putchar(' ');
+                    }
                 }
             }
 
-            putchar(ch);
+            if (use_color && (last_fr != -1 || last_br != -1)) {
+                printf("\x1b[0m");
+            }
+            putchar('\n');
         }
+    } else {
+        /* 2x4 subpixel braille renderer with ordered dithering */
+        static const float bayer_4x2[4][2] = {
+            {0.0625f, 0.5625f},
+            {0.8125f, 0.3125f},
+            {0.4375f, 0.9375f},
+            {0.6875f, 0.1875f}
+        };
+        static const unsigned char dot_bit[4][2] = {
+            {0x01, 0x08}, /* dots 1,4 */
+            {0x02, 0x10}, /* dots 2,5 */
+            {0x04, 0x20}, /* dots 3,6 */
+            {0x40, 0x80}  /* dots 7,8 */
+        };
 
-        if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
-            printf("\x1b[0m");
+        for (int row = 0; row < draw_rows; row++) {
+            int last_r = -1, last_g = -1, last_b = -1;
+
+            for (int col = 0; col < draw_cols; col++) {
+                unsigned char mask = 0;
+                float mean_t = 0.0f;
+                int valid = 0;
+
+                for (int dy = 0; dy < 4; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        float t = 0.0f;
+                        size_t sx = (size_t)(col * 2 + dx);
+                        size_t sy = (size_t)(row * 4 + dy);
+                        if (sample_field(sx, sy, (size_t)(draw_cols * 2), (size_t)(draw_rows * 4), range, &t) != 0) {
+                            continue;
+                        }
+
+                        valid++;
+                        mean_t += t;
+                        if (t >= bayer_4x2[dy][dx]) {
+                            mask |= dot_bit[dy][dx];
+                        }
+                    }
+                }
+
+                if (valid == 0) {
+                    if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
+                        printf("\x1b[0m");
+                        last_r = last_g = last_b = -1;
+                    }
+                    putchar(' ');
+                    continue;
+                }
+
+                if (use_color && cmap) {
+                    float avg_t = mean_t / (float)valid;
+                    unsigned char r, g, b;
+                    colormap_map_value(cmap, avg_t, &r, &g, &b);
+                    if ((int)r != last_r || (int)g != last_g || (int)b != last_b) {
+                        printf("\x1b[38;2;%u;%u;%um", r, g, b);
+                        last_r = (int)r;
+                        last_g = (int)g;
+                        last_b = (int)b;
+                    }
+                }
+
+                if (mask == 0) {
+                    putchar(' ');
+                } else {
+                    print_utf8_codepoint(CP_BRAILLE_BASE + mask);
+                }
+            }
+
+            if (use_color && (last_r != -1 || last_g != -1 || last_b != -1)) {
+                printf("\x1b[0m");
+            }
+            putchar('\n');
         }
-        putchar('\n');
     }
 
     fflush(stdout);
@@ -485,6 +683,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"influence", required_argument, 0, 'i'},
         {"delay", required_argument, 0, 'd'},
         {"chars", required_argument, 0, 1000},
+        {"render", required_argument, 0, 1003},
         {"color", no_argument, 0, 1001},
         {"no-color", no_argument, 0, 1002},
         {"help", no_argument, 0, 'h'},
@@ -515,6 +714,15 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 strncpy(options.glyph_ramp, optarg, sizeof(options.glyph_ramp) - 1);
                 options.glyph_ramp[sizeof(options.glyph_ramp) - 1] = '\0';
                 break;
+            case 1003: {
+                int mode = 0;
+                if (parse_render_mode(optarg, &mode) != 0) {
+                    fprintf(stderr, "Invalid render mode: %s (use ascii|half|braille)\n", optarg);
+                    return -1;
+                }
+                options.render_mode = mode;
+                break;
+            }
             case 1001:
                 options.color_mode = 1;
                 break;
@@ -715,6 +923,10 @@ int main(int argc, char *argv[]) {
                         case 'C':
                             colormap_prev();
                             view->data_valid = 0;
+                            changed = 1;
+                            break;
+                        case 'm':
+                            cycle_render_mode();
                             changed = 1;
                             break;
                         case '[':
