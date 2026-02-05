@@ -8,6 +8,7 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 - **Unified data handling**: Treats all data as collections of points with lon/lat coordinates
 - **Fast visualization**: KDTree-based nearest-neighbor interpolation to regular grid
 - **X11/Xaw interface**: Works over SSH with X forwarding
+- **Terminal quick-look mode**: Separate `uterm` binary with raw terminal interaction
 - **Animation support**: Step through time dimensions
 - **Multiple colormaps**: viridis, hot, grayscale, plus the full cmocean set
 
@@ -36,6 +37,7 @@ Build:
 ```bash
 make                  # Without zarr support
 make WITH_ZARR=1      # With zarr support
+make uterm            # Build terminal viewer only
 ```
 
 The Makefile auto-detects XQuartz at `/opt/X11`.
@@ -56,6 +58,7 @@ Build:
 ```bash
 make                  # Without zarr support
 make WITH_ZARR=1      # With zarr support
+make uterm            # Build terminal viewer only
 ```
 
 ### DKRZ Levante
@@ -110,6 +113,22 @@ Options:
   -h, --help             Show help message
 ```
 
+Terminal quick-look mode:
+```bash
+./uterm [options] <data_file.nc|data.zarr> [file2 ...]
+
+Options (uterm):
+  -m, --mesh <file>      Mesh file with coordinates
+  -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
+  -i, --influence <m>    Influence radius in meters (default: 200000)
+  -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
+  --chars <ramp>     ASCII ramp (default: " .:-=+*#%@")
+  --render <mode>    Render mode: ascii | half | braille
+  --color            Force ANSI color output
+  --no-color         Disable ANSI color output
+  -h, --help             Show help
+```
+
 ### Examples
 
 FESOM unstructured data with separate mesh file:
@@ -145,6 +164,15 @@ Zarr store with consolidated metadata (faster loading):
 # Zarr stores with .zmetadata file are loaded more efficiently
 ./ushow output.zarr                    # Auto-detects consolidated metadata
 ```
+
+Terminal mode examples:
+```bash
+./uterm temp.fesom.1964.nc -m fesom.mesh.diag.nc
+./uterm data.zarr --color
+./uterm "temp.fesom.*.nc" -m mesh.nc -d 120
+./uterm data.nc --render half
+./uterm data.nc --render braille --color
+```
 ## Testing
 
 Run the test suite:
@@ -162,6 +190,7 @@ The test suite includes:
 - **test_mesh**: Coordinate transformations (lon/lat to Cartesian)
 - **test_regrid**: Interpolation to regular grids
 - **test_colormaps**: Color mapping functions
+- **test_term_render_mode**: Terminal render mode parsing/cycling helpers
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_integration**: End-to-end workflow tests
@@ -178,6 +207,22 @@ The test suite includes:
 - **Colormap button**: Click to cycle through colormaps
 - **Dimension panel**: Shows dimension names, ranges, current values
 - **Colorbar**: Min/max and intermediate labels update as you adjust range
+
+## Terminal Controls (`uterm`)
+
+- `q`: quit
+- `space`: pause/resume animation
+- `j` / `k`: previous/next time step
+- `u` / `i`: previous/next depth level
+- `n` / `p`: next/previous variable
+- `1`..`9`: direct variable select (first 9 variables)
+- `c` / `C`: next/previous colormap
+- `m`: cycle render mode (`ascii` -> `half` -> `braille`)
+- `[` / `]`: decrease/increase display minimum
+- `{` / `}`: decrease/increase display maximum
+- `r`: reset min/max to estimated global range
+- `s`: save current frame as PPM (`<var>_t<time>_d<depth>.ppm`)
+- `?`: toggle extended help line
 
 ## Data Flow
 
