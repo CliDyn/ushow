@@ -72,27 +72,37 @@ UTERM_LIBS = $(COMMON_LIBS)
 # Zarr support (optional) - build with: make WITH_ZARR=1
 # Requires: c-blosc and lz4 (brew install c-blosc lz4 on macOS)
 ifdef WITH_ZARR
-# DKRZ Levante spack paths (blosc uses lib64, lz4 uses lib)
-DKRZ_BLOSC := /sw/spack-levante/c-blosc-1.21.6-okwipv
-DKRZ_LZ4 := /sw/spack-levante/lz4-1.9.4-qrh4oo
+# Prefer pkg-config (works well for conda/homebrew/system). Fallback to fixed prefixes.
+ZARR_PKG_CFLAGS := $(shell pkg-config --cflags blosc lz4 2>/dev/null)
+ZARR_PKG_LIBS := $(shell pkg-config --libs blosc lz4 2>/dev/null)
 
-# Try DKRZ first, then brew (macOS), then /usr/local fallback
-ifneq ($(wildcard $(DKRZ_BLOSC)/include/blosc.h),)
-  BLOSC_PREFIX := $(DKRZ_BLOSC)
-  LZ4_PREFIX := $(DKRZ_LZ4)
-  BLOSC_LIBDIR := $(BLOSC_PREFIX)/lib64
-  LZ4_LIBDIR := $(LZ4_PREFIX)/lib
-  ZARR_RPATH := -Wl,-rpath,$(BLOSC_LIBDIR) -Wl,-rpath,$(LZ4_LIBDIR)
+ifneq ($(strip $(ZARR_PKG_CFLAGS)$(ZARR_PKG_LIBS)),)
+  ZARR_CFLAGS := -DHAVE_ZARR $(ZARR_PKG_CFLAGS)
+  ZARR_LIBS := $(ZARR_PKG_LIBS)
 else
-  BLOSC_PREFIX := $(shell brew --prefix c-blosc 2>/dev/null || echo "/usr/local")
-  LZ4_PREFIX := $(shell brew --prefix lz4 2>/dev/null || echo "/usr/local")
-  BLOSC_LIBDIR := $(BLOSC_PREFIX)/lib
-  LZ4_LIBDIR := $(LZ4_PREFIX)/lib
-  ZARR_RPATH :=
+  # DKRZ Levante spack paths (blosc uses lib64, lz4 uses lib)
+  DKRZ_BLOSC := /sw/spack-levante/c-blosc-1.21.6-okwipv
+  DKRZ_LZ4 := /sw/spack-levante/lz4-1.9.4-qrh4oo
+
+  # Try DKRZ first, then brew (macOS), then /usr/local fallback
+  ifneq ($(wildcard $(DKRZ_BLOSC)/include/blosc.h),)
+    BLOSC_PREFIX ?= $(DKRZ_BLOSC)
+    LZ4_PREFIX ?= $(DKRZ_LZ4)
+    BLOSC_LIBDIR := $(BLOSC_PREFIX)/lib64
+    LZ4_LIBDIR := $(LZ4_PREFIX)/lib
+    ZARR_RPATH := -Wl,-rpath,$(BLOSC_LIBDIR) -Wl,-rpath,$(LZ4_LIBDIR)
+  else
+    BLOSC_PREFIX ?= $(shell brew --prefix c-blosc 2>/dev/null || echo "/usr/local")
+    LZ4_PREFIX ?= $(shell brew --prefix lz4 2>/dev/null || echo "/usr/local")
+    BLOSC_LIBDIR := $(BLOSC_PREFIX)/lib
+    LZ4_LIBDIR := $(LZ4_PREFIX)/lib
+    ZARR_RPATH :=
+  endif
+
+  ZARR_CFLAGS := -DHAVE_ZARR -I$(BLOSC_PREFIX)/include -I$(LZ4_PREFIX)/include
+  ZARR_LIBS := -L$(BLOSC_LIBDIR) -L$(LZ4_LIBDIR) -lblosc -llz4 $(ZARR_RPATH)
 endif
 
-ZARR_CFLAGS := -DHAVE_ZARR -I$(BLOSC_PREFIX)/include -I$(LZ4_PREFIX)/include
-ZARR_LIBS := -L$(BLOSC_LIBDIR) -L$(LZ4_LIBDIR) -lblosc -llz4 $(ZARR_RPATH)
 BASE_CFLAGS += $(ZARR_CFLAGS)
 X11_FULL_CFLAGS += $(ZARR_CFLAGS)
 USHOW_LIBS += $(ZARR_LIBS)
@@ -117,6 +127,7 @@ USHOW_SRCS = $(SRCDIR)/ushow.c \
              $(SRCDIR)/interface/colorbar.c
 
 UTERM_SRCS = $(SRCDIR)/uterm.c \
+             $(SRCDIR)/term_render_mode.c \
              $(COMMON_SRCS)
 
 # Add zarr sources if enabled
@@ -154,13 +165,16 @@ $(UTERM_TARGET): $(UTERM_OBJS)
 	@echo "Built $(UTERM_TARGET)"
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 $(OBJDIR)/interface/%.o: $(SRCDIR)/interface/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(X11_FULL_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 # cJSON object file (zarr support)
 $(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c
+	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) -I$(SRCDIR) -c -o $@ $<
 
 clean:
@@ -174,7 +188,9 @@ $(OBJDIR)/ushow.o: $(SRCDIR)/ushow.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h 
                    $(SRCDIR)/view.h $(SRCDIR)/interface/x_interface.h
 $(OBJDIR)/uterm.o: $(SRCDIR)/uterm.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h \
                    $(SRCDIR)/regrid.h $(SRCDIR)/file_netcdf.h $(SRCDIR)/colormaps.h \
+                   $(SRCDIR)/term_render_mode.h \
                    $(SRCDIR)/view.h
+$(OBJDIR)/term_render_mode.o: $(SRCDIR)/term_render_mode.c $(SRCDIR)/term_render_mode.h
 $(OBJDIR)/kdtree.o: $(SRCDIR)/kdtree.c $(SRCDIR)/kdtree.h
 $(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/regrid.o: $(SRCDIR)/regrid.c $(SRCDIR)/regrid.h $(SRCDIR)/mesh.h \

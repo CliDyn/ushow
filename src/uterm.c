@@ -14,6 +14,7 @@
 #endif
 #include "colormaps.h"
 #include "view.h"
+#include "term_render_mode.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -58,7 +59,7 @@ typedef struct {
     double target_resolution;
     int frame_delay_ms;
     int color_mode;      /* -1 auto, 0 off, 1 on */
-    int render_mode;     /* 0=ascii, 1=half, 2=braille */
+    int render_mode;     /* TERM_RENDER_* */
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
 } UTermOptions;
@@ -68,7 +69,7 @@ static UTermOptions options = {
     .target_resolution = DEFAULT_RESOLUTION,
     .frame_delay_ms = 200,
     .color_mode = -1,
-    .render_mode = 0,
+    .render_mode = TERM_RENDER_ASCII,
     .mesh_file = "",
     .glyph_ramp = DEFAULT_GLYPH_RAMP
 };
@@ -157,35 +158,8 @@ static float clamp01(float v) {
     return v;
 }
 
-static const char *render_mode_name(int mode) {
-    switch (mode) {
-        case 1: return "half";
-        case 2: return "braille";
-        case 0:
-        default:
-            return "ascii";
-    }
-}
-
-static int parse_render_mode(const char *s, int *mode_out) {
-    if (!s || !mode_out) return -1;
-    if (strcmp(s, "ascii") == 0) {
-        *mode_out = 0;
-        return 0;
-    }
-    if (strcmp(s, "half") == 0 || strcmp(s, "half-block") == 0 || strcmp(s, "halfblock") == 0) {
-        *mode_out = 1;
-        return 0;
-    }
-    if (strcmp(s, "braille") == 0) {
-        *mode_out = 2;
-        return 0;
-    }
-    return -1;
-}
-
 static void cycle_render_mode(void) {
-    options.render_mode = (options.render_mode + 1) % 3;
+    options.render_mode = term_cycle_render_mode(options.render_mode);
 }
 
 static void print_utf8_codepoint(unsigned int cp) {
@@ -370,11 +344,11 @@ static void render_frame(int show_help, int animating) {
     if (cmap) {
         printf("cmap: %s | range: %.6g .. %.6g | color: %s | render: %s\n",
                cmap->name, current_var->user_min, current_var->user_max,
-               use_color ? "on" : "off", render_mode_name(options.render_mode));
+               use_color ? "on" : "off", term_render_mode_name(options.render_mode));
     } else {
         printf("cmap: none | range: %.6g .. %.6g | color: %s | render: %s\n",
                current_var->user_min, current_var->user_max,
-               use_color ? "on" : "off", render_mode_name(options.render_mode));
+               use_color ? "on" : "off", term_render_mode_name(options.render_mode));
     }
 
     printf("keys: q quit | n/p var | j/k time | u/i depth | space play/pause | c/C cmap | m mode\n");
@@ -387,7 +361,7 @@ static void render_frame(int show_help, int animating) {
     float range = current_var->user_max - current_var->user_min;
     if (range <= 0.0f) range = 1.0f;
 
-    if (options.render_mode == 0) {
+    if (options.render_mode == TERM_RENDER_ASCII) {
         for (int row = 0; row < draw_rows; row++) {
             int last_r = -1, last_g = -1, last_b = -1;
 
@@ -426,7 +400,7 @@ static void render_frame(int show_help, int animating) {
             }
             putchar('\n');
         }
-    } else if (options.render_mode == 1) {
+    } else if (options.render_mode == TERM_RENDER_HALF) {
         for (int row = 0; row < draw_rows; row++) {
             int last_fr = -1, last_fg = -1, last_fb = -1;
             int last_br = -1, last_bg = -1, last_bb = -1;
@@ -715,8 +689,8 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.glyph_ramp[sizeof(options.glyph_ramp) - 1] = '\0';
                 break;
             case 1003: {
-                int mode = 0;
-                if (parse_render_mode(optarg, &mode) != 0) {
+                int mode = TERM_RENDER_ASCII;
+                if (term_parse_render_mode(optarg, &mode) != 0) {
                     fprintf(stderr, "Invalid render mode: %s (use ascii|half|braille)\n", optarg);
                     return -1;
                 }

@@ -122,9 +122,10 @@ Options (uterm):
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
   -i, --influence <m>    Influence radius in meters (default: 200000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
-      --chars <ramp>     ASCII ramp (default: " .:-=+*#%@")
-      --color            Force ANSI color output
-      --no-color         Disable ANSI color output
+  --chars <ramp>     ASCII ramp (default: " .:-=+*#%@")
+  --render <mode>    Render mode: ascii | half | braille
+  --color            Force ANSI color output
+  --no-color         Disable ANSI color output
   -h, --help             Show help
 ```
 
@@ -169,6 +170,8 @@ Terminal mode examples:
 ./uterm temp.fesom.1964.nc -m fesom.mesh.diag.nc
 ./uterm data.zarr --color
 ./uterm "temp.fesom.*.nc" -m mesh.nc -d 120
+./uterm data.nc --render half
+./uterm data.nc --render braille --color
 ```
 ## Testing
 
@@ -187,6 +190,7 @@ The test suite includes:
 - **test_mesh**: Coordinate transformations (lon/lat to Cartesian)
 - **test_regrid**: Interpolation to regular grids
 - **test_colormaps**: Color mapping functions
+- **test_term_render_mode**: Terminal render mode parsing/cycling helpers
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_integration**: End-to-end workflow tests
@@ -213,6 +217,7 @@ The test suite includes:
 - `n` / `p`: next/previous variable
 - `1`..`9`: direct variable select (first 9 variables)
 - `c` / `C`: next/previous colormap
+- `m`: cycle render mode (`ascii` -> `half` -> `braille`)
 - `[` / `]`: decrease/increase display minimum
 - `{` / `}`: decrease/increase display maximum
 - `r`: reset min/max to estimated global range
