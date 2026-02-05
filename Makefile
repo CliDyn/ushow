@@ -31,9 +31,15 @@ DKRZ_XMU := /sw/spack-levante/libxmu-1.1.2-4spgxo
 DKRZ_XEXT := /sw/spack-levante/libxext-1.3.3-o4dpxe
 
 X11_PKG_CFLAGS := $(shell pkg-config --cflags x11 xt xaw7 2>/dev/null)
-X11_PKG_INCLUDEDIR := $(shell pkg-config --variable=includedir x11 2>/dev/null)
-X11_CFLAGS := $(if $(X11_PKG_INCLUDEDIR),-I$(X11_PKG_INCLUDEDIR),) $(X11_PKG_CFLAGS)
-X11_LIBS := $(shell pkg-config --libs x11 xt xaw7 2>/dev/null)
+X11_PKG_LIBS := $(shell pkg-config --libs x11 xt xaw7 2>/dev/null)
+ifneq ($(strip $(X11_PKG_LIBS)),)
+  X11_PKG_INCLUDEDIR := $(shell pkg-config --variable=includedir x11 2>/dev/null)
+  X11_CFLAGS := $(if $(X11_PKG_INCLUDEDIR),-I$(X11_PKG_INCLUDEDIR),) $(X11_PKG_CFLAGS)
+  X11_LIBS := $(X11_PKG_LIBS)
+else
+  X11_CFLAGS :=
+  X11_LIBS :=
+endif
 ifeq ($(X11_CFLAGS),)
   ifdef X11_PREFIX
     X11_CFLAGS := -I$(X11_PREFIX)/include
