@@ -22,3 +22,15 @@ dist/
 
 # Logs
 *.log
+
+# macOS debug bundles
+*.dSYM/
+
+# Project binaries
+/ushow
+/uterm
+
+# Generated test executables and bundles
+/tests/test_*
+!/tests/test_*.c
+!/tests/test_*.h
