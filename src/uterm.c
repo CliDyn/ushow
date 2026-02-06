@@ -27,6 +27,7 @@
 #include <sys/select.h>
 #include <termios.h>
 #include <time.h>
+#include <signal.h>
 #include <unistd.h>
 
 #define HEADER_LINES 5
@@ -87,6 +88,12 @@ static void disable_raw_mode(void) {
     fflush(stdout);
 }
 
+static void signal_handler(int sig) {
+    (void)sig;
+    disable_raw_mode();
+    _exit(128 + sig);
+}
+
 static int enable_raw_mode(void) {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
         fprintf(stderr, "uterm requires a terminal (tty) on stdin and stdout\n");
@@ -111,6 +118,9 @@ static int enable_raw_mode(void) {
 
     termios_enabled = 1;
     atexit(disable_raw_mode);
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     printf("\x1b[?25l");
     fflush(stdout);
