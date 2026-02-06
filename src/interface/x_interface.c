@@ -482,7 +482,8 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
 
     cmap_button = XtVaCreateManagedWidget(
         "Cmap", commandWidgetClass, optionbox,
-        XtNwidth, BUTTON_WIDTH + 20,
+        XtNwidth, 90,
+        XtNresize, False,
         NULL
     );
     XtAddCallback(cmap_button, XtNcallback, cmap_callback, NULL);
@@ -1068,7 +1069,7 @@ void x_update_range_label(float min_val, float max_val) {
 
 void x_update_colormap_label(const char *name) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%s", name);
+    snprintf(buf, sizeof(buf), "%-12.12s", name);
     XtVaSetValues(cmap_button, XtNlabel, buf, NULL);
 }
 
