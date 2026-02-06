@@ -47,6 +47,13 @@ USMesh *mesh_create_from_zarr(USFile *file);
 #endif
 
 /*
+ * Load element connectivity from an external NetCDF mesh file.
+ * This enables polygon rendering mode.
+ * Returns 0 on success, -1 on failure.
+ */
+int mesh_load_connectivity(USMesh *mesh, const char *mesh_filename);
+
+/*
  * Free mesh and all associated memory.
  */
 void mesh_free(USMesh *mesh);

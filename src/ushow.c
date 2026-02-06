@@ -289,6 +289,26 @@ static void on_save(void) {
     }
 }
 
+static void on_render_mode_toggle(void) {
+    if (!view) return;
+    
+    /* In polygon-only mode, don't allow switching */
+    if (options.polygon_only) {
+        printf("Polygon-only mode: cannot switch to interpolate mode\n");
+        return;
+    }
+    
+    int result = view_toggle_render_mode(view);
+    if (result >= 0) {
+        const char *mode_name = (result == RENDER_MODE_POLYGON) ? "Polygon" : "Interp";
+        x_update_render_mode_label(mode_name);
+        printf("Render mode: %s\n", mode_name);
+        update_display();
+    } else {
+        printf("Polygon mode not available (no mesh connectivity loaded)\n");
+    }
+}
+
 static void update_dim_info_current(void) {
     if (!view || !current_dim_info) return;
 
@@ -567,6 +587,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -r, --resolution <deg> Target grid resolution (default: 1.0)\n");
     fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay (default: 200)\n");
+    fprintf(stderr, "  -p, --polygon-only     Skip regridding, use polygon mode only (faster)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
@@ -582,16 +603,17 @@ int main(int argc, char *argv[]) {
 
     /* Parse command line options */
     static struct option long_options[] = {
-        {"mesh",       required_argument, 0, 'm'},
-        {"resolution", required_argument, 0, 'r'},
-        {"influence",  required_argument, 0, 'i'},
-        {"delay",      required_argument, 0, 'd'},
-        {"help",       no_argument,       0, 'h'},
+        {"mesh",         required_argument, 0, 'm'},
+        {"resolution",   required_argument, 0, 'r'},
+        {"influence",    required_argument, 0, 'i'},
+        {"delay",        required_argument, 0, 'd'},
+        {"polygon-only", no_argument,       0, 'p'},
+        {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:ph", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
                 mesh_filename = optarg;
@@ -605,6 +627,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'd':
                 options.frame_delay_ms = atoi(optarg);
+                break;
+            case 'p':
+                options.polygon_only = 1;
                 break;
             case 'h':
             default:
@@ -755,14 +780,25 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Create regridding structure */
-    printf("Creating regrid structure...\n");
-    regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
-    if (!regrid) {
-        fprintf(stderr, "Failed to create regrid\n");
-        mesh_free(mesh);
-        netcdf_close(file);
-        return 1;
+    /* Create regridding structure (skip if polygon-only mode) */
+    if (!options.polygon_only) {
+        printf("Creating regrid structure...\n");
+        regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
+        if (!regrid) {
+            fprintf(stderr, "Failed to create regrid\n");
+            mesh_free(mesh);
+            netcdf_close(file);
+            return 1;
+        }
+    } else {
+        printf("Polygon-only mode: skipping regrid\n");
+        if (mesh->n_elements == 0 || mesh->elem_nodes == NULL) {
+            fprintf(stderr, "Error: --polygon-only requires mesh with element connectivity\n");
+            fprintf(stderr, "Use -m <mesh.nc> to specify a mesh file with face_nodes\n");
+            mesh_free(mesh);
+            netcdf_close(file);
+            return 1;
+        }
     }
 
     /* Scan for variables */
@@ -895,6 +931,7 @@ int main(int argc, char *argv[]) {
     x_set_zoom_callback(on_zoom);
     x_set_save_callback(on_save);
     x_set_dim_nav_callback(on_dim_nav);
+    x_set_render_mode_callback(on_render_mode_toggle);
 
     /* Create view */
     view = view_create();
@@ -908,6 +945,12 @@ int main(int argc, char *argv[]) {
         view_set_fileset(view, zarr_fileset);
     }
 #endif
+
+    /* Set polygon-only mode if requested */
+    if (options.polygon_only) {
+        view->render_mode = RENDER_MODE_POLYGON;
+        x_update_render_mode_label("Polygon");
+    }
 
     /* Select first variable */
     on_var_select(0);

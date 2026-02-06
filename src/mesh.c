@@ -79,6 +79,9 @@ USMesh *mesh_create(double *lon, double *lat, size_t n_points, CoordType type) {
     return mesh;
 }
 
+/* Forward declaration */
+static int load_element_connectivity(USMesh *mesh, int ncid);
+
 /* Coordinate variable info */
 typedef struct {
     int varid;
@@ -295,6 +298,16 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     if (mesh_filename && mesh_filename[0]) {
         mesh->mesh_filename = strdup(mesh_filename);
         mesh->mesh_loaded = 1;
+        
+        /* Try to load element connectivity for polygon rendering */
+        int mesh_ncid_conn;
+        if (nc_open(mesh_filename, NC_NOWRITE, &mesh_ncid_conn) == NC_NOERR) {
+            load_element_connectivity(mesh, mesh_ncid_conn);
+            nc_close(mesh_ncid_conn);
+        }
+    } else {
+        /* Try to load connectivity from data file */
+        load_element_connectivity(mesh, data_ncid);
     }
 
     return mesh;
@@ -595,11 +608,105 @@ USMesh *mesh_create_from_zarr(USFile *file) {
 
 #endif /* HAVE_ZARR */
 
+/* Load element connectivity from mesh file for polygon rendering */
+static int load_element_connectivity(USMesh *mesh, int ncid) {
+    int status, varid;
+    
+    /* Try to find face_nodes variable (UGRID convention) */
+    status = nc_inq_varid(ncid, "face_nodes", &varid);
+    if (status != NC_NOERR) {
+        /* Try alternate names */
+        status = nc_inq_varid(ncid, "elem", &varid);
+        if (status != NC_NOERR) {
+            return -1;  /* No connectivity found - not an error, just no polygon mode */
+        }
+    }
+    
+    /* Get dimensions */
+    int ndims;
+    nc_inq_varndims(ncid, varid, &ndims);
+    if (ndims != 2) {
+        fprintf(stderr, "face_nodes: expected 2D, got %dD\n", ndims);
+        return -1;
+    }
+    
+    int dimids[2];
+    size_t dim_sizes[2];
+    nc_inq_vardimid(ncid, varid, dimids);
+    nc_inq_dimlen(ncid, dimids[0], &dim_sizes[0]);
+    nc_inq_dimlen(ncid, dimids[1], &dim_sizes[1]);
+    
+    /* Determine which dimension is vertices (n3=3) vs elements */
+    size_t n_vertices, n_elements;
+    int transpose = 0;
+    if (dim_sizes[0] == 3 || dim_sizes[0] == 4) {
+        n_vertices = dim_sizes[0];
+        n_elements = dim_sizes[1];
+        transpose = 1;  /* Data is (n3, elem), need to transpose */
+    } else if (dim_sizes[1] == 3 || dim_sizes[1] == 4) {
+        n_elements = dim_sizes[0];
+        n_vertices = dim_sizes[1];
+        transpose = 0;
+    } else {
+        fprintf(stderr, "face_nodes: cannot identify vertex dimension\n");
+        return -1;
+    }
+    
+    printf("Loading element connectivity: %zu elements, %zu vertices each\n",
+           n_elements, n_vertices);
+    
+    /* Allocate and read connectivity */
+    int *raw_data = malloc(n_elements * n_vertices * sizeof(int));
+    if (!raw_data) return -1;
+    
+    status = nc_get_var_int(ncid, varid, raw_data);
+    if (status != NC_NOERR) {
+        fprintf(stderr, "Failed to read face_nodes: %s\n", nc_strerror(status));
+        free(raw_data);
+        return -1;
+    }
+    
+    /* Get start_index attribute (1-based or 0-based indexing) */
+    int start_index = 1;  /* Default to 1-based (Fortran) */
+    nc_get_att_int(ncid, varid, "start_index", &start_index);
+    
+    /* Allocate final array and transpose if needed */
+    mesh->elem_nodes = malloc(n_elements * n_vertices * sizeof(int));
+    if (!mesh->elem_nodes) {
+        free(raw_data);
+        return -1;
+    }
+    
+    if (transpose) {
+        /* Data is (n3, elem), transpose to (elem, n3) and convert to 0-based */
+        for (size_t e = 0; e < n_elements; e++) {
+            for (size_t v = 0; v < n_vertices; v++) {
+                int node_idx = raw_data[v * n_elements + e];
+                mesh->elem_nodes[e * n_vertices + v] = node_idx - start_index;
+            }
+        }
+    } else {
+        /* Data is (elem, n3), just convert to 0-based */
+        for (size_t i = 0; i < n_elements * n_vertices; i++) {
+            mesh->elem_nodes[i] = raw_data[i] - start_index;
+        }
+    }
+    
+    free(raw_data);
+    
+    mesh->n_elements = n_elements;
+    mesh->n_vertices = (int)n_vertices;
+    
+    printf("Loaded %zu triangular elements for polygon rendering\n", n_elements);
+    return 0;
+}
+
 void mesh_free(USMesh *mesh) {
     if (!mesh) return;
     free(mesh->lon);
     free(mesh->lat);
     free(mesh->xyz);
+    free(mesh->elem_nodes);
     free(mesh->mesh_filename);
     free(mesh->lon_varname);
     free(mesh->lat_varname);
