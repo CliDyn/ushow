@@ -128,6 +128,12 @@ static SaveCallback save_cb = NULL;
 typedef void (*DimNavCallback)(int dim_index, int direction);
 static DimNavCallback dim_nav_cb = NULL;
 
+typedef void (*RenderModeCallback)(void);
+static RenderModeCallback render_mode_cb = NULL;
+
+/* Render mode button */
+static Widget render_mode_button = NULL;
+
 /* State */
 static size_t current_n_times = 1;
 static size_t current_n_depths = 1;
@@ -213,6 +219,11 @@ static void zoom_out_callback(Widget w, XtPointer client_data, XtPointer call_da
 static void save_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)client_data; (void)call_data;
     if (save_cb) save_cb();
+}
+
+static void render_mode_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
+    if (render_mode_cb) render_mode_cb();
 }
 
 /* Dimension current button click - advance forward */
@@ -417,6 +428,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "buttonbox", boxWidgetClass, main_form,
         XtNorientation, XtorientHorizontal,
         XtNfromVert, label_value,
+        XtNwidth, 580,
         NULL
     );
 
@@ -477,6 +489,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "optionbox", boxWidgetClass, main_form,
         XtNorientation, XtorientHorizontal,
         XtNfromVert, buttonbox,
+        XtNwidth, 580,
         NULL
     );
 
@@ -517,6 +530,12 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     btn = XtVaCreateManagedWidget("Save", commandWidgetClass, optionbox,
         XtNwidth, BUTTON_WIDTH, NULL);
     XtAddCallback(btn, XtNcallback, save_callback_fn, NULL);
+
+    render_mode_button = XtVaCreateManagedWidget("Interp", commandWidgetClass, optionbox,
+        XtNwidth, BUTTON_WIDTH + 10,
+        XtNresize, False,
+        NULL);
+    XtAddCallback(render_mode_button, XtNcallback, render_mode_callback_fn, NULL);
 
     /* ===== Colorbar ===== */
     colorbar_form = XtVaCreateManagedWidget(
@@ -676,6 +695,13 @@ void x_set_range_callback(void (*cb)(int)) { range_adjust_cb = cb; }
 void x_set_zoom_callback(void (*cb)(int)) { zoom_cb = cb; }
 void x_set_save_callback(void (*cb)(void)) { save_cb = cb; }
 void x_set_dim_nav_callback(DimNavCallback cb) { dim_nav_cb = cb; }
+void x_set_render_mode_callback(void (*cb)(void)) { render_mode_cb = cb; }
+
+void x_update_render_mode_label(const char *mode_name) {
+    if (render_mode_button && mode_name) {
+        XtVaSetValues(render_mode_button, XtNlabel, mode_name, NULL);
+    }
+}
 
 /* ========== Variable Selector ========== */
 

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 /* Default scale factor for display */
 #define DEFAULT_SCALE_FACTOR 2
@@ -31,7 +32,9 @@ void view_set_fileset(USView *view, USFileSet *fileset) {
 }
 
 int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) {
-    if (!view || !var || !mesh || !regrid) return -1;
+    if (!view || !var || !mesh) return -1;
+    /* regrid can be NULL in polygon-only mode */
+    if (!regrid && view->render_mode != RENDER_MODE_POLYGON) return -1;
 
     view->variable = var;
     view->mesh = mesh;
@@ -49,7 +52,13 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 
     /* Get target grid dimensions */
     size_t nx, ny;
-    regrid_get_target_dims(regrid, &nx, &ny);
+    if (regrid) {
+        regrid_get_target_dims(regrid, &nx, &ny);
+    } else {
+        /* Polygon-only mode: use fixed display size */
+        nx = 720;  /* 0.5 degree equivalent */
+        ny = 360;
+    }
     view->data_nx = nx;
     view->data_ny = ny;
 
@@ -67,13 +76,21 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     view->raw_data_size = n_points;
 
     free(view->regridded_data);
-    view->regridded_data = malloc(n_data * sizeof(float));
+    if (regrid) {
+        view->regridded_data = malloc(n_data * sizeof(float));
+    } else {
+        view->regridded_data = NULL;  /* Not needed in polygon-only mode */
+    }
 
     free(view->pixels);
     view->pixels = malloc(n_display * 3);  /* RGB */
 
-    if (!view->raw_data || !view->regridded_data || !view->pixels) {
+    if (!view->raw_data || !view->pixels) {
         fprintf(stderr, "Failed to allocate view buffers\n");
+        return -1;
+    }
+    if (regrid && !view->regridded_data) {
+        fprintf(stderr, "Failed to allocate regridded data buffer\n");
         return -1;
     }
 
@@ -158,8 +175,210 @@ int view_set_scale(USView *view, int scale) {
     return 0;
 }
 
+int view_polygon_available(USView *view) {
+    if (!view || !view->mesh) return 0;
+    return (view->mesh->n_elements > 0 && view->mesh->elem_nodes != NULL);
+}
+
+int view_set_render_mode(USView *view, RenderMode mode) {
+    if (!view) return -1;
+    
+    if (mode == RENDER_MODE_POLYGON && !view_polygon_available(view)) {
+        fprintf(stderr, "Polygon mode unavailable: no element connectivity loaded\n");
+        return -1;
+    }
+    
+    view->render_mode = mode;
+    view->data_valid = 0;
+    return 0;
+}
+
+int view_toggle_render_mode(USView *view) {
+    if (!view) return -1;
+    
+    if (view->render_mode == RENDER_MODE_INTERPOLATE) {
+        if (view_polygon_available(view)) {
+            view->render_mode = RENDER_MODE_POLYGON;
+            view->data_valid = 0;
+            return (int)RENDER_MODE_POLYGON;
+        }
+        return -1;  /* Polygon mode not available */
+    } else {
+        view->render_mode = RENDER_MODE_INTERPOLATE;
+        view->data_valid = 0;
+        return (int)RENDER_MODE_INTERPOLATE;
+    }
+}
+
+/* Helper: convert lon/lat to pixel coordinates */
+static void lonlat_to_pixel(double lon, double lat, size_t width, size_t height,
+                            int *px, int *py) {
+    /* Simple equirectangular projection: lon [-180,180] -> [0,width], lat [-90,90] -> [height,0] */
+    *px = (int)((lon + 180.0) / 360.0 * (double)width);
+    *py = (int)((90.0 - lat) / 180.0 * (double)height);
+}
+
+/* Helper: clamp value to range */
+static inline int clamp_int(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+/* Fill a triangle using scanline algorithm */
+static void fill_triangle(unsigned char *pixels, size_t width, size_t height,
+                          int x0, int y0, int x1, int y1, int x2, int y2,
+                          unsigned char r, unsigned char g, unsigned char b) {
+    /* Sort vertices by y coordinate */
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; t = x0; x0 = x1; x1 = t; }
+    if (y0 > y2) { int t = y0; y0 = y2; y2 = t; t = x0; x0 = x2; x2 = t; }
+    if (y1 > y2) { int t = y1; y1 = y2; y2 = t; t = x1; x1 = x2; x2 = t; }
+    
+    /* Skip degenerate triangles */
+    if (y2 == y0) return;
+    
+    /* Clamp to image bounds */
+    int y_start = clamp_int(y0, 0, (int)height - 1);
+    int y_end = clamp_int(y2, 0, (int)height - 1);
+    
+    for (int y = y_start; y <= y_end; y++) {
+        int x_left, x_right;
+        
+        /* Calculate x intersections for this scanline */
+        if (y < y1) {
+            /* Upper part of triangle */
+            if (y1 != y0) {
+                x_left = x0 + (x1 - x0) * (y - y0) / (y1 - y0);
+            } else {
+                x_left = x0;
+            }
+        } else {
+            /* Lower part of triangle */
+            if (y2 != y1) {
+                x_left = x1 + (x2 - x1) * (y - y1) / (y2 - y1);
+            } else {
+                x_left = x1;
+            }
+        }
+        
+        if (y2 != y0) {
+            x_right = x0 + (x2 - x0) * (y - y0) / (y2 - y0);
+        } else {
+            x_right = x0;
+        }
+        
+        if (x_left > x_right) { int t = x_left; x_left = x_right; x_right = t; }
+        
+        x_left = clamp_int(x_left, 0, (int)width - 1);
+        x_right = clamp_int(x_right, 0, (int)width - 1);
+        
+        /* Fill scanline */
+        for (int x = x_left; x <= x_right; x++) {
+            size_t idx = ((size_t)y * width + (size_t)x) * 3;
+            pixels[idx + 0] = r;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = b;
+        }
+    }
+}
+
+/* Render polygons directly to pixel buffer */
+static int view_render_polygons(USView *view) {
+    if (!view || !view->mesh || !view->variable) return -1;
+    
+    USMesh *mesh = view->mesh;
+    if (!mesh->elem_nodes || mesh->n_elements == 0) return -1;
+    
+    size_t width = view->display_nx;
+    size_t height = view->display_ny;
+    
+    /* Clear to black */
+    memset(view->pixels, 0, width * height * 3);
+    
+    /* Get colormap */
+    USColormap *cmap = colormap_get_current();
+    if (!cmap) return -1;
+    
+    float data_min = view->variable->user_min;
+    float data_max = view->variable->user_max;
+    float data_range = data_max - data_min;
+    if (data_range <= 0.0f) data_range = 1.0f;
+    
+    /* For each element, compute average value and render triangle */
+    for (size_t e = 0; e < mesh->n_elements; e++) {
+        int *nodes = &mesh->elem_nodes[e * mesh->n_vertices];
+        
+        /* Get vertex coordinates */
+        double lons[4], lats[4];
+        float values[4];
+        int valid = 1;
+        float sum_val = 0.0f;
+        int n_valid_vals = 0;
+        
+        for (int v = 0; v < mesh->n_vertices; v++) {
+            int node_idx = nodes[v];
+            if (node_idx < 0 || (size_t)node_idx >= mesh->n_points) {
+                valid = 0;
+                break;
+            }
+            lons[v] = mesh->lon[node_idx];
+            lats[v] = mesh->lat[node_idx];
+            values[v] = view->raw_data[node_idx];
+            
+            /* Check for fill value */
+            if (values[v] != view->variable->fill_value && 
+                fabsf(values[v]) < 1e30f) {
+                sum_val += values[v];
+                n_valid_vals++;
+            }
+        }
+        
+        if (!valid || n_valid_vals == 0) continue;
+        
+        /* Skip elements that span the dateline (lon difference > 180) */
+        double max_lon_diff = 0.0;
+        for (int v = 0; v < mesh->n_vertices; v++) {
+            for (int w = v + 1; w < mesh->n_vertices; w++) {
+                double diff = fabs(lons[v] - lons[w]);
+                if (diff > max_lon_diff) max_lon_diff = diff;
+            }
+        }
+        if (max_lon_diff > 180.0) continue;  /* Skip dateline-crossing elements */
+        
+        /* Compute average value and map to color */
+        float avg_val = sum_val / (float)n_valid_vals;
+        float t = (avg_val - data_min) / data_range;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        
+        unsigned char r, g, b;
+        colormap_map_value(cmap, t, &r, &g, &b);
+        
+        /* Convert vertices to pixel coordinates */
+        int px[4], py[4];
+        for (int v = 0; v < mesh->n_vertices; v++) {
+            lonlat_to_pixel(lons[v], lats[v], width, height, &px[v], &py[v]);
+        }
+        
+        /* Render triangle(s) */
+        fill_triangle(view->pixels, width, height,
+                      px[0], py[0], px[1], py[1], px[2], py[2], r, g, b);
+        
+        /* If quad (4 vertices), render second triangle */
+        if (mesh->n_vertices == 4) {
+            fill_triangle(view->pixels, width, height,
+                          px[0], py[0], px[2], py[2], px[3], py[3], r, g, b);
+        }
+    }
+    
+    return 0;
+}
+
 int view_update(USView *view) {
-    if (!view || !view->variable || !view->mesh || !view->regrid) return -1;
+    if (!view || !view->variable || !view->mesh) return -1;
+    
+    /* Polygon mode doesn't need regrid */
+    if (view->render_mode != RENDER_MODE_POLYGON && !view->regrid) return -1;
 
     /* Read data slice - dispatch based on file type */
     int read_result;
@@ -189,7 +408,20 @@ int view_update(USView *view) {
         return -1;
     }
 
-    /* Apply regridding */
+    /* Render based on mode */
+    if (view->render_mode == RENDER_MODE_POLYGON) {
+        /* Direct polygon rendering */
+        if (view_render_polygons(view) != 0) {
+            fprintf(stderr, "Polygon rendering failed, falling back to interpolate\n");
+            view->render_mode = RENDER_MODE_INTERPOLATE;
+            /* Fall through to interpolate mode */
+        } else {
+            view->data_valid = 1;
+            return 0;
+        }
+    }
+    
+    /* Interpolate mode: regrid and colormap */
     regrid_apply(view->regrid, view->raw_data,
                  view->variable->fill_value, view->regridded_data);
 

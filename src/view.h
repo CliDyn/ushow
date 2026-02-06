@@ -46,6 +46,23 @@ int view_step_time(USView *view, int delta);
 int view_set_scale(USView *view, int scale);
 
 /*
+ * Set render mode (interpolate or polygon).
+ * Returns 0 on success, -1 if polygon mode unavailable.
+ */
+int view_set_render_mode(USView *view, RenderMode mode);
+
+/*
+ * Toggle render mode between interpolate and polygon.
+ * Returns new mode, or -1 if polygon mode unavailable.
+ */
+int view_toggle_render_mode(USView *view);
+
+/*
+ * Check if polygon rendering is available for current mesh.
+ */
+int view_polygon_available(USView *view);
+
+/*
  * Update display: read data, regrid, and convert to pixels.
  */
 int view_update(USView *view);

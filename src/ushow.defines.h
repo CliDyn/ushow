@@ -73,6 +73,11 @@ struct USMesh {
     CoordType   coord_type;
     size_t      orig_nx, orig_ny;   /* Original grid dimensions if structured */
 
+    /* Element connectivity for polygon rendering (triangular elements) */
+    size_t      n_elements;         /* Number of triangular elements */
+    int         n_vertices;         /* Vertices per element (3 for triangles) */
+    int        *elem_nodes;         /* Node indices [n_elements * n_vertices] */
+
     /* Mesh file info (for unstructured data with separate mesh) */
     char       *mesh_filename;
     int         mesh_loaded;
@@ -172,12 +177,21 @@ struct USFileSet {
     char       *base_filename;      /* First filename (for display) */
 };
 
+/* Render mode */
+typedef enum {
+    RENDER_MODE_INTERPOLATE = 0,    /* Default: regrid to regular grid */
+    RENDER_MODE_POLYGON             /* Render actual mesh polygons */
+} RenderMode;
+
 /* Current view state */
 struct USView {
     USVar      *variable;           /* Current variable being displayed */
     USMesh     *mesh;               /* Current mesh/coordinates */
     USRegrid   *regrid;             /* Current regridding setup */
     USFileSet  *fileset;            /* Multi-file set (NULL for single file) */
+
+    /* Render mode */
+    RenderMode  render_mode;        /* Interpolate or polygon rendering */
 
     /* Current position in data space */
     size_t      time_index;         /* Current time step (virtual if fileset) */
@@ -215,6 +229,7 @@ typedef struct {
     double      target_resolution;  /* Target grid resolution in degrees */
     char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
     int         frame_delay_ms;     /* Animation speed */
+    int         polygon_only;       /* Skip regridding, polygon mode only */
 } USOptions;
 
 /* Dimension info for display */

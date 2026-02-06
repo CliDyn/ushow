@@ -33,6 +33,12 @@ void x_set_mouse_callback(void (*cb)(int x, int y));
 void x_set_range_callback(void (*cb)(int action));  /* 0=min-, 1=min+, 2=max-, 3=max+ */
 void x_set_zoom_callback(void (*cb)(int delta));    /* +1=zoom in, -1=zoom out */
 void x_set_save_callback(void (*cb)(void));         /* save button pressed */
+void x_set_render_mode_callback(void (*cb)(void));  /* toggle render mode */
+
+/*
+ * Update render mode label.
+ */
+void x_update_render_mode_label(const char *mode_name);
 
 /*
  * Set up variable selector buttons.
