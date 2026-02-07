@@ -289,6 +289,23 @@ static void on_save(void) {
     }
 }
 
+static void on_range_button(void) {
+    if (!current_var) return;
+
+    float new_min, new_max;
+    int result = x_range_popup_show(
+        current_var->user_min, current_var->user_max,
+        current_var->global_min, current_var->global_max,
+        &new_min, &new_max);
+
+    if (result == 1) {  /* RANGE_POPUP_OK */
+        current_var->user_min = new_min;
+        current_var->user_max = new_max;
+        x_update_range_label(current_var->user_min, current_var->user_max);
+        update_display();
+    }
+}
+
 static void on_render_mode_toggle(void) {
     if (!view) return;
     
@@ -932,6 +949,7 @@ int main(int argc, char *argv[]) {
     x_set_save_callback(on_save);
     x_set_dim_nav_callback(on_dim_nav);
     x_set_render_mode_callback(on_render_mode_toggle);
+    x_set_range_button_callback(on_range_button);
 
     /* Create view */
     view = view_create();

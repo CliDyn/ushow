@@ -8,6 +8,7 @@
 
 #include "x_interface.h"
 #include "colorbar.h"
+#include "range_popup.h"
 #include <X11/Xlib.h>
 #include <X11/Intrinsic.h>
 #include <X11/StringDefs.h>
@@ -132,6 +133,9 @@ static DimNavCallback dim_nav_cb = NULL;
 typedef void (*RenderModeCallback)(void);
 static RenderModeCallback render_mode_cb = NULL;
 
+typedef void (*RangeButtonCallback)(void);
+static RangeButtonCallback range_button_cb = NULL;
+
 /* Render mode button */
 static Widget render_mode_button = NULL;
 
@@ -225,6 +229,11 @@ static void save_callback_fn(Widget w, XtPointer client_data, XtPointer call_dat
 static void render_mode_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)client_data; (void)call_data;
     if (render_mode_cb) render_mode_cb();
+}
+
+static void range_button_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
+    if (range_button_cb) range_button_cb();
 }
 
 /* Dimension current button click - advance forward */
@@ -559,6 +568,11 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         NULL
     );
 
+    btn = XtVaCreateManagedWidget("Range", commandWidgetClass, colorbar_form,
+        XtNwidth, BUTTON_WIDTH + 10,
+        NULL);
+    XtAddCallback(btn, XtNcallback, range_button_callback_fn, NULL);
+
     /* ===== Variable Selector ===== */
     varsel_form = XtVaCreateManagedWidget(
         "varselForm", boxWidgetClass, main_form,
@@ -673,6 +687,9 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     /* Realize main window */
     XtRealizeWidget(top_level);
 
+    /* Initialize range popup (before colorbar GC, after realize) */
+    range_popup_init(top_level, display, app_context);
+
     /* Create colorbar GC and initialize */
     cbar_gc = XCreateGC(display, XtWindow(colorbar_widget), 0, NULL);
     colorbar_init(CBAR_WIDTH, CBAR_HEIGHT);
@@ -703,6 +720,7 @@ void x_set_zoom_callback(void (*cb)(int)) { zoom_cb = cb; }
 void x_set_save_callback(void (*cb)(void)) { save_cb = cb; }
 void x_set_dim_nav_callback(DimNavCallback cb) { dim_nav_cb = cb; }
 void x_set_render_mode_callback(void (*cb)(void)) { render_mode_cb = cb; }
+void x_set_range_button_callback(void (*cb)(void)) { range_button_cb = cb; }
 
 void x_update_render_mode_label(const char *mode_name) {
     if (render_mode_button && mode_name) {
@@ -1185,6 +1203,15 @@ void x_update_colorbar(float min_val, float max_val, size_t width) {
     }
 }
 
+/* ========== Range Popup ========== */
+
+int x_range_popup_show(float old_min, float old_max,
+                       float global_min, float global_max,
+                       float *new_min, float *new_max) {
+    return range_popup_show(old_min, old_max, global_min, global_max,
+                            new_min, new_max);
+}
+
 /* ========== Timer Functions ========== */
 
 void x_set_timer(int delay_ms, void (*callback)(void)) {
@@ -1207,6 +1234,7 @@ void x_main_loop(void) {
 
 void x_cleanup(void) {
     x_clear_timer();
+    range_popup_cleanup();
 
     if (ximage) {
         ximage->data = NULL;

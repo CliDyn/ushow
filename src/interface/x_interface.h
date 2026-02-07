@@ -34,6 +34,7 @@ void x_set_range_callback(void (*cb)(int action));  /* 0=min-, 1=min+, 2=max-, 3
 void x_set_zoom_callback(void (*cb)(int delta));    /* +1=zoom in, -1=zoom out */
 void x_set_save_callback(void (*cb)(void));         /* save button pressed */
 void x_set_render_mode_callback(void (*cb)(void));  /* toggle render mode */
+void x_set_range_button_callback(void (*cb)(void)); /* Range button pressed */
 
 /*
  * Update render mode label.
@@ -101,6 +102,14 @@ void x_update_value_label(double lon, double lat, float value);
  * height: colorbar height in pixels (should match image height)
  */
 void x_update_colorbar(float min_val, float max_val, size_t height);
+
+/*
+ * Show range popup dialog (modal).
+ * Returns RANGE_POPUP_OK (1) or RANGE_POPUP_CANCEL (0).
+ */
+int x_range_popup_show(float old_min, float old_max,
+                       float global_min, float global_max,
+                       float *new_min, float *new_max);
 
 /*
  * Set animation timer.
