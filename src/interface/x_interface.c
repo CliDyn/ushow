@@ -27,15 +27,16 @@
 #include <string.h>
 
 /* Layout constants (like ncview's app_data) */
-#define LABEL_WIDTH      350
+#define LABEL_WIDTH      580
 #define BUTTON_WIDTH     50
+#define CBAR_WIDTH       480
 #define CBAR_HEIGHT      16
 #define CBAR_LABEL_HEIGHT 14
 #define CBAR_PAD         2
-#define DIM_COL_WIDTH    50
-#define NAME_COL_WIDTH   80
-#define VALUE_COL_WIDTH  80
-#define UNITS_COL_WIDTH  80
+#define DIM_COL_WIDTH    55
+#define NAME_COL_WIDTH   100
+#define VALUE_COL_WIDTH  95
+#define UNITS_COL_WIDTH  95
 
 /* Global X11 resources */
 static Display *display = NULL;
@@ -389,6 +390,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "labelTitle", labelWidgetClass, main_form,
         XtNlabel, "ushow - Unstructured Data Viewer",
         XtNwidth, LABEL_WIDTH,
+        XtNjustify, XtJustifyCenter,
         XtNborderWidth, 0,
         NULL
     );
@@ -398,6 +400,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "labelVarname", labelWidgetClass, main_form,
         XtNlabel, "Variable: (none)",
         XtNwidth, LABEL_WIDTH,
+        XtNjustify, XtJustifyCenter,
         XtNfromVert, label_title,
         XtNborderWidth, 0,
         NULL
@@ -408,6 +411,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "labelDims", labelWidgetClass, main_form,
         XtNlabel, "Time: -/-  Depth: -/-",
         XtNwidth, LABEL_WIDTH,
+        XtNjustify, XtJustifyCenter,
         XtNfromVert, label_varname,
         XtNborderWidth, 0,
         NULL
@@ -418,6 +422,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "labelValue", labelWidgetClass, main_form,
         XtNlabel, "Lon: -  Lat: -  Val: -",
         XtNwidth, LABEL_WIDTH,
+        XtNjustify, XtJustifyCenter,
         XtNfromVert, label_dims,
         XtNborderWidth, 0,
         NULL
@@ -539,14 +544,16 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
 
     /* ===== Colorbar ===== */
     colorbar_form = XtVaCreateManagedWidget(
-        "colorbarForm", formWidgetClass, main_form,
+        "colorbarForm", boxWidgetClass, main_form,
+        XtNorientation, XtorientHorizontal,
         XtNfromVert, optionbox,
+        XtNwidth, LABEL_WIDTH,
         NULL
     );
 
     colorbar_widget = XtVaCreateManagedWidget(
         "colorbar", simpleWidgetClass, colorbar_form,
-        XtNwidth, LABEL_WIDTH,
+        XtNwidth, CBAR_WIDTH,
         XtNheight, CBAR_HEIGHT + CBAR_LABEL_HEIGHT + CBAR_PAD,
         XtNborderWidth, 1,
         NULL
@@ -668,7 +675,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
 
     /* Create colorbar GC and initialize */
     cbar_gc = XCreateGC(display, XtWindow(colorbar_widget), 0, NULL);
-    colorbar_init(LABEL_WIDTH, CBAR_HEIGHT);
+    colorbar_init(CBAR_WIDTH, CBAR_HEIGHT);
     XtAddEventHandler(colorbar_widget, ExposureMask, False, colorbar_expose_callback, NULL);
 
     /* Pop up the image window */
@@ -1117,7 +1124,7 @@ void x_update_colorbar(float min_val, float max_val, size_t width) {
         XtVaGetValues(colorbar_widget, XtNwidth, &w, XtNheight, &h, NULL);
     }
     if (w == 0) {
-        w = LABEL_WIDTH;
+        w = CBAR_WIDTH;
     }
 
     colorbar_init((size_t)w, CBAR_HEIGHT);
