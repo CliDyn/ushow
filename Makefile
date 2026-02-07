@@ -132,7 +132,8 @@ USHOW_SRCS = $(SRCDIR)/ushow.c \
              $(SRCDIR)/interface/x_interface.c \
              $(SRCDIR)/interface/colorbar.c \
              $(SRCDIR)/interface/range_popup.c \
-             $(SRCDIR)/interface/range_utils.c
+             $(SRCDIR)/interface/range_utils.c \
+             $(SRCDIR)/interface/timeseries_popup.c
 
 UTERM_SRCS = $(SRCDIR)/uterm.c \
              $(SRCDIR)/term_render_mode.c \
@@ -209,7 +210,9 @@ $(OBJDIR)/view.o: $(SRCDIR)/view.c $(SRCDIR)/view.h $(SRCDIR)/file_netcdf.h \
                   $(SRCDIR)/regrid.h $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/interface/x_interface.o: $(SRCDIR)/interface/x_interface.c \
                                     $(SRCDIR)/interface/x_interface.h \
-                                    $(SRCDIR)/interface/colorbar.h $(SRCDIR)/ushow.defines.h
+                                    $(SRCDIR)/interface/colorbar.h \
+                                    $(SRCDIR)/interface/timeseries_popup.h \
+                                    $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/interface/colorbar.o: $(SRCDIR)/interface/colorbar.c \
                                  $(SRCDIR)/interface/colorbar.h $(SRCDIR)/colormaps.h
 $(OBJDIR)/interface/range_popup.o: $(SRCDIR)/interface/range_popup.c \
@@ -217,6 +220,9 @@ $(OBJDIR)/interface/range_popup.o: $(SRCDIR)/interface/range_popup.c \
                                     $(SRCDIR)/interface/range_utils.h
 $(OBJDIR)/interface/range_utils.o: $(SRCDIR)/interface/range_utils.c \
                                     $(SRCDIR)/interface/range_utils.h
+$(OBJDIR)/interface/timeseries_popup.o: $(SRCDIR)/interface/timeseries_popup.c \
+                                         $(SRCDIR)/interface/timeseries_popup.h \
+                                         $(SRCDIR)/ushow.defines.h
 
 # Zarr dependencies (when WITH_ZARR is set)
 ifdef WITH_ZARR

@@ -18,6 +18,7 @@
 #include <string.h>
 #include <strings.h>
 #include <math.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <limits.h>
@@ -60,6 +61,75 @@ static void *zarr_decompress(const void *compressed, size_t comp_size,
                              size_t expected_size, ZarrArray *za);
 static int parse_dtype(const char *dtype_str, char *dtype, int *size, int *little_endian);
 static int matches_name_list(const char *name, const char **list);
+
+/*
+ * CF time unit parsing and conversion helpers.
+ * Used to normalize time values when files have different epochs.
+ */
+
+static int zarr_parse_cf_time_units(const char *units, double *unit_seconds,
+                                    int *y, int *mo, int *d, int *h, int *mi, double *sec) {
+    if (!units || !unit_seconds || !y || !mo || !d || !h || !mi || !sec) return 0;
+    const char *since = strstr(units, "since");
+    if (!since) return 0;
+
+    char unit_buf[32] = {0};
+    if (sscanf(units, "%31s", unit_buf) != 1) return 0;
+    for (char *p = unit_buf; *p; ++p)
+        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+
+    if (strcmp(unit_buf, "seconds") == 0 || strcmp(unit_buf, "second") == 0 ||
+        strcmp(unit_buf, "secs") == 0 || strcmp(unit_buf, "sec") == 0 || strcmp(unit_buf, "s") == 0)
+        *unit_seconds = 1.0;
+    else if (strcmp(unit_buf, "minutes") == 0 || strcmp(unit_buf, "minute") == 0 ||
+             strcmp(unit_buf, "mins") == 0 || strcmp(unit_buf, "min") == 0)
+        *unit_seconds = 60.0;
+    else if (strcmp(unit_buf, "hours") == 0 || strcmp(unit_buf, "hour") == 0 ||
+             strcmp(unit_buf, "hrs") == 0 || strcmp(unit_buf, "hr") == 0)
+        *unit_seconds = 3600.0;
+    else if (strcmp(unit_buf, "days") == 0 || strcmp(unit_buf, "day") == 0)
+        *unit_seconds = 86400.0;
+    else
+        return 0;
+
+    const char *p = since + 5;
+    while (*p == ' ') p++;
+    int n = sscanf(p, "%d-%d-%d %d:%d:%lf", y, mo, d, h, mi, sec);
+    if (n < 3) return 0;
+    if (n == 3) { *h = 0; *mi = 0; *sec = 0.0; }
+    return 1;
+}
+
+static int64_t zarr_days_from_civil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int64_t)(era * 146097 + (int)doe - 719468);
+}
+
+static double zarr_convert_time_units(double value, const char *src_units, const char *dst_units) {
+    if (!src_units || !dst_units) return value;
+    if (strcmp(src_units, dst_units) == 0) return value;
+
+    double src_unit_sec, dst_unit_sec;
+    int sy, smo, sd, sh, smi, dy, dmo, dd, dh, dmi;
+    double ssec, dsec;
+
+    if (!zarr_parse_cf_time_units(src_units, &src_unit_sec, &sy, &smo, &sd, &sh, &smi, &ssec))
+        return value;
+    if (!zarr_parse_cf_time_units(dst_units, &dst_unit_sec, &dy, &dmo, &dd, &dh, &dmi, &dsec))
+        return value;
+
+    double src_epoch = (double)zarr_days_from_civil(sy, (unsigned)smo, (unsigned)sd) * 86400.0
+                     + sh * 3600.0 + smi * 60.0 + ssec;
+    double abs_sec = src_epoch + value * src_unit_sec;
+
+    double dst_epoch = (double)zarr_days_from_civil(dy, (unsigned)dmo, (unsigned)dd) * 86400.0
+                     + dh * 3600.0 + dmi * 60.0 + dsec;
+    return (abs_sec - dst_epoch) / dst_unit_sec;
+}
 
 /*
  * Check if path is a zarr store
@@ -1290,23 +1360,38 @@ USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
             dims[i].size = fs->total_times;
             dims[i].is_scannable = (fs->total_times > 1);
 
+            /* Reference units from file 0 (stored in dims[i].units) */
+            const char *ref_units = dims[i].units;
+
             /* Allocate space for all time values */
             dims[i].values = malloc(fs->total_times * sizeof(double));
             if (dims[i].values) {
                 size_t offset = 0;
 
-                /* Collect time values from all files */
+                /* Collect time values from all files, normalizing to file 0 units */
                 for (int f = 0; f < fs->n_files; f++) {
                     ZarrStore *store = (ZarrStore *)fs->files[f]->zarr_data;
                     size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
 
                     /* Try to read time coordinate from this file */
                     int got_values = 0;
+                    char file_units[MAX_NAME_LEN] = {0};
+
                     if (store->use_consolidated && store->metadata) {
                         cJSON *metadata = cJSON_GetObjectItem(store->metadata, "metadata");
                         if (metadata) {
                             cJSON *time_zarray = cJSON_GetObjectItem(metadata, "time/.zarray");
                             cJSON *time_zattrs = cJSON_GetObjectItem(metadata, "time/.zattrs");
+
+                            /* Get this file's time units */
+                            if (time_zattrs) {
+                                cJSON *units_item = cJSON_GetObjectItem(time_zattrs, "units");
+                                if (units_item && cJSON_IsString(units_item)) {
+                                    strncpy(file_units, units_item->valuestring,
+                                            sizeof(file_units) - 1);
+                                }
+                            }
+
                             if (time_zarray) {
                                 char time_path[PATH_MAX];
                                 snprintf(time_path, sizeof(time_path), "%s/time", store->base_path);
@@ -1320,11 +1405,18 @@ USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
                                         if (time_za->dtype == 'i' && time_za->dtype_size == 8) {
                                             int64_t *src = (int64_t *)coord_data;
                                             for (size_t t = 0; t < file_times; t++) {
-                                                dims[i].values[offset + t] = (double)src[t];
+                                                dims[i].values[offset + t] =
+                                                    zarr_convert_time_units((double)src[t],
+                                                                           file_units, ref_units);
                                             }
                                             got_values = 1;
                                         } else if (time_za->dtype == 'd') {
-                                            memcpy(&dims[i].values[offset], coord_data, file_times * sizeof(double));
+                                            double *src = (double *)coord_data;
+                                            for (size_t t = 0; t < file_times; t++) {
+                                                dims[i].values[offset + t] =
+                                                    zarr_convert_time_units(src[t],
+                                                                           file_units, ref_units);
+                                            }
                                             got_values = 1;
                                         }
                                         free(coord_data);
@@ -1336,7 +1428,6 @@ USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
                     }
 
                     if (!got_values) {
-                        /* Fall back to indices */
                         for (size_t t = 0; t < file_times; t++) {
                             dims[i].values[offset + t] = (double)(offset + t);
                         }
@@ -1355,6 +1446,154 @@ USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
     }
 
     return dims;
+}
+
+int zarr_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
+                         double **times_out, float **values_out,
+                         int **valid_out, size_t *n_out) {
+    if (!var || !var->zarr_data || !var->mesh || !times_out || !values_out || !valid_out || !n_out)
+        return -1;
+
+    *times_out = NULL;
+    *values_out = NULL;
+    *valid_out = NULL;
+    *n_out = 0;
+
+    size_t n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
+    size_t n_points = var->mesh->n_points;
+    if (n_times == 0 || node_idx >= n_points) return -1;
+
+    double *times = calloc(n_times, sizeof(double));
+    float *values = calloc(n_times, sizeof(float));
+    int *valid = calloc(n_times, sizeof(int));
+    float *slice = malloc(n_points * sizeof(float));
+    if (!times || !values || !valid || !slice) {
+        free(times); free(values); free(valid); free(slice);
+        return -1;
+    }
+
+    /* Read one slice per time step and extract the node value */
+    for (size_t t = 0; t < n_times; t++) {
+        if (zarr_read_slice(var, t, depth_idx, slice) != 0) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+            continue;
+        }
+        float val = slice[node_idx];
+        if (val != val || fabsf(val) > INVALID_DATA_THRESHOLD ||
+            fabsf(val - var->fill_value) < 1e-6f * fabsf(var->fill_value)) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+        } else {
+            values[t] = val;
+            valid[t] = 1;
+        }
+    }
+    free(slice);
+
+    /* Read time coordinate values */
+    if (var->time_dim_id >= 0) {
+        USDimInfo *dim_info = zarr_get_dim_info(var, (int[]){0});
+        if (dim_info) {
+            for (int i = 0; i < 2; i++) {
+                if (var->time_dim_id >= 0 &&
+                    strcmp(dim_info[i].name, var->dim_names[var->time_dim_id]) == 0) {
+                    if (dim_info[i].values && dim_info[i].size == n_times) {
+                        memcpy(times, dim_info[i].values, n_times * sizeof(double));
+                    } else {
+                        for (size_t t = 0; t < n_times; t++)
+                            times[t] = (double)t;
+                    }
+                    break;
+                }
+            }
+            /* Get actual dim count and free */
+            int nd = 0;
+            if (var->time_dim_id >= 0) nd++;
+            if (var->depth_dim_id >= 0) nd++;
+            zarr_free_dim_info(dim_info, nd);
+        } else {
+            for (size_t t = 0; t < n_times; t++)
+                times[t] = (double)t;
+        }
+    } else {
+        times[0] = 0.0;
+    }
+
+    *times_out = times;
+    *values_out = values;
+    *valid_out = valid;
+    *n_out = n_times;
+    return 0;
+}
+
+int zarr_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                 size_t node_idx, size_t depth_idx,
+                                 double **times_out, float **values_out,
+                                 int **valid_out, size_t *n_out) {
+    if (!fs || !var || !var->mesh || !times_out || !values_out || !valid_out || !n_out)
+        return -1;
+
+    *times_out = NULL;
+    *values_out = NULL;
+    *valid_out = NULL;
+    *n_out = 0;
+
+    size_t total = fs->total_times;
+    size_t n_points = var->mesh->n_points;
+    if (total == 0 || node_idx >= n_points) return -1;
+
+    double *times = calloc(total, sizeof(double));
+    float *values = calloc(total, sizeof(float));
+    int *valid = calloc(total, sizeof(int));
+    float *slice = malloc(n_points * sizeof(float));
+    if (!times || !values || !valid || !slice) {
+        free(times); free(values); free(valid); free(slice);
+        return -1;
+    }
+
+    /* Read time coordinate values from fileset dim info */
+    USDimInfo *dim_info = zarr_get_dim_info_fileset(fs, var, (int[]){0});
+    if (dim_info) {
+        int nd = 0;
+        if (var->time_dim_id >= 0) nd++;
+        if (var->depth_dim_id >= 0) nd++;
+        for (int i = 0; i < nd; i++) {
+            if (var->time_dim_id >= 0 &&
+                strcmp(dim_info[i].name, var->dim_names[var->time_dim_id]) == 0) {
+                if (dim_info[i].values && dim_info[i].size == total) {
+                    memcpy(times, dim_info[i].values, total * sizeof(double));
+                }
+                break;
+            }
+        }
+        zarr_free_dim_info(dim_info, nd);
+    }
+
+    /* Read each virtual time step */
+    for (size_t t = 0; t < total; t++) {
+        if (zarr_read_slice_fileset(fs, var, t, depth_idx, slice) != 0) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+            continue;
+        }
+        float val = slice[node_idx];
+        if (val != val || fabsf(val) > INVALID_DATA_THRESHOLD ||
+            fabsf(val - var->fill_value) < 1e-6f * fabsf(var->fill_value)) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+        } else {
+            values[t] = val;
+            valid[t] = 1;
+        }
+    }
+    free(slice);
+
+    *times_out = times;
+    *values_out = values;
+    *valid_out = valid;
+    *n_out = total;
+    return 0;
 }
 
 void zarr_close_fileset(USFileSet *fs) {

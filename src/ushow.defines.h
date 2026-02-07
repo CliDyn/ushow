@@ -244,6 +244,18 @@ typedef struct {
     int         is_scannable;            /* Can we navigate this dimension? */
 } USDimInfo;
 
+/* Time series data for popup plot */
+typedef struct {
+    double *times;       /* Time coordinate values [n_points] */
+    float  *values;      /* Data values [n_points] */
+    int    *valid;       /* 1=valid, 0=fill [n_points] */
+    size_t  n_points;    /* Total time steps */
+    size_t  n_valid;     /* Valid (non-fill) count */
+    char    title[512];  /* "varname (units) at lon, lat" */
+    char    x_label[256];/* Time units string or "Time Step" */
+    char    y_label[256];/* Variable name + units */
+} TSData;
+
 /* Colormap entry */
 typedef struct {
     unsigned char r, g, b;
