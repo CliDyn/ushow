@@ -130,7 +130,9 @@ COMMON_SRCS = $(SRCDIR)/kdtree.c \
 USHOW_SRCS = $(SRCDIR)/ushow.c \
              $(COMMON_SRCS) \
              $(SRCDIR)/interface/x_interface.c \
-             $(SRCDIR)/interface/colorbar.c
+             $(SRCDIR)/interface/colorbar.c \
+             $(SRCDIR)/interface/range_popup.c \
+             $(SRCDIR)/interface/range_utils.c
 
 UTERM_SRCS = $(SRCDIR)/uterm.c \
              $(SRCDIR)/term_render_mode.c \
@@ -210,6 +212,11 @@ $(OBJDIR)/interface/x_interface.o: $(SRCDIR)/interface/x_interface.c \
                                     $(SRCDIR)/interface/colorbar.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/interface/colorbar.o: $(SRCDIR)/interface/colorbar.c \
                                  $(SRCDIR)/interface/colorbar.h $(SRCDIR)/colormaps.h
+$(OBJDIR)/interface/range_popup.o: $(SRCDIR)/interface/range_popup.c \
+                                    $(SRCDIR)/interface/range_popup.h \
+                                    $(SRCDIR)/interface/range_utils.h
+$(OBJDIR)/interface/range_utils.o: $(SRCDIR)/interface/range_utils.c \
+                                    $(SRCDIR)/interface/range_utils.h
 
 # Zarr dependencies (when WITH_ZARR is set)
 ifdef WITH_ZARR

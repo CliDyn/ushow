@@ -191,6 +191,7 @@ The test suite includes:
 - **test_regrid**: Interpolation to regular grids
 - **test_colormaps**: Color mapping functions
 - **test_term_render_mode**: Terminal render mode parsing/cycling helpers
+- **test_range_popup**: Range popup logic (symmetric computation, value parsing)
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_integration**: End-to-end workflow tests
@@ -205,6 +206,11 @@ The test suite includes:
   - `Fwd >`: Start forward animation
 - **Time/Depth sliders**: Navigate through dimensions
 - **Colormap button**: Click to cycle through colormaps
+- **Min-/Min+/Max-/Max+**: Adjust display range in 10% steps
+- **Range button**: Opens a popup dialog to set the display range explicitly:
+  - **Minimum/Maximum**: Editable text fields for exact values
+  - **Symmetric about Zero**: Sets range to [-max(|min|,|max|), max(|min|,|max|)]
+  - **Reset to Global Values**: Restores the variable's full data range
 - **Dimension panel**: Shows dimension names, ranges, current values
 - **Colorbar**: Min/max and intermediate labels update as you adjust range
 

@@ -47,7 +47,7 @@ endif
 SRCDIR = ../src
 
 # Test executables
-TEST_TARGETS = test_kdtree test_mesh test_regrid test_colormaps test_file_netcdf test_integration test_term_render_mode
+TEST_TARGETS = test_kdtree test_mesh test_regrid test_colormaps test_file_netcdf test_integration test_term_render_mode test_range_popup
 
 # Add zarr test if enabled
 ifdef WITH_ZARR
@@ -96,6 +96,11 @@ test_integration: test_integration.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OB
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_term_render_mode: test_term_render_mode.c $(SRCDIR)/term_render_mode.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+RANGE_UTILS_OBJ = $(SRCDIR)/interface/range_utils.c
+
+test_range_popup: test_range_popup.c $(RANGE_UTILS_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Zarr test (only built with WITH_ZARR=1)
@@ -149,6 +154,9 @@ test-integration: test_integration
 test-term-render-mode: test_term_render_mode
 	./test_term_render_mode
 
+test-range-popup: test_range_popup
+	./test_range_popup
+
 test-zarr: test_file_zarr
 	./test_file_zarr
 
@@ -185,6 +193,7 @@ help:
 	@echo "  test-zarr    - Run Zarr tests only (requires WITH_ZARR=1)"
 	@echo "  test-integration - Run Integration tests only"
 	@echo "  test-term-render-mode - Run terminal render mode tests only"
+	@echo "  test-range-popup - Run range popup logic tests only"
 	@echo "  memcheck     - Run valgrind memory check on all tests"
 	@echo "  clean        - Remove test executables and temp files"
 	@echo "  help         - Show this help message"
