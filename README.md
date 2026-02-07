@@ -192,6 +192,7 @@ The test suite includes:
 - **test_colormaps**: Color mapping functions
 - **test_term_render_mode**: Terminal render mode parsing/cycling helpers
 - **test_range_popup**: Range popup logic (symmetric computation, value parsing)
+- **test_timeseries**: Time series reading, multi-file concatenation, and CF time unit conversion
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_integration**: End-to-end workflow tests
@@ -211,6 +212,12 @@ The test suite includes:
   - **Minimum/Maximum**: Editable text fields for exact values
   - **Symmetric about Zero**: Sets range to [-max(|min|,|max|), max(|min|,|max|)]
   - **Reset to Global Values**: Restores the variable's full data range
+- **Time series plot**: Click on the image to show a time series popup at that location:
+  - Displays value vs time for the selected variable at the clicked grid point
+  - Y-axis with numeric tick labels, X-axis with CF time date formatting (when detected)
+  - Blue data line with dots at data points; gaps shown for fill/missing values
+  - Works with both single files and multi-file datasets
+  - When files have different time epochs, values are automatically normalized to a common reference
 - **Dimension panel**: Shows dimension names, ranges, current values
 - **Colorbar**: Min/max and intermediate labels update as you adjust range
 
