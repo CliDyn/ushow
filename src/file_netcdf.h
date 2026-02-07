@@ -95,4 +95,27 @@ USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_ou
  */
 void netcdf_close_fileset(USFileSet *fs);
 
+/*
+ * Read time series at a single spatial node across all time steps.
+ * node_idx: index into flattened spatial array (mesh->n_points)
+ * depth_idx: depth level index (ignored if no depth dimension)
+ * times_out: allocated array of time coordinate values [n_out]
+ * values_out: allocated array of data values [n_out]
+ * valid_out: allocated array of validity flags [n_out]
+ * n_out: number of time steps read
+ * Returns 0 on success, -1 on error. Caller must free output arrays.
+ */
+int netcdf_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
+                           double **times_out, float **values_out,
+                           int **valid_out, size_t *n_out);
+
+/*
+ * Read time series at a single spatial node across all files in a fileset.
+ * Same interface as netcdf_read_timeseries but concatenates across files.
+ */
+int netcdf_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                   size_t node_idx, size_t depth_idx,
+                                   double **times_out, float **values_out,
+                                   int **valid_out, size_t *n_out);
+
 #endif /* FILE_NETCDF_H */

@@ -36,6 +36,15 @@ void x_set_save_callback(void (*cb)(void));         /* save button pressed */
 void x_set_render_mode_callback(void (*cb)(void));  /* toggle render mode */
 void x_set_range_button_callback(void (*cb)(void)); /* Range button pressed */
 
+/* Mouse click callback for time series extraction */
+typedef void (*MouseClickCallback)(int x, int y);
+void x_set_mouse_click_callback(MouseClickCallback cb);
+
+/*
+ * Show time series popup with the given data.
+ */
+void x_show_timeseries(const TSData *data);
+
 /*
  * Update render mode label.
  */

@@ -9,6 +9,7 @@
 #include "x_interface.h"
 #include "colorbar.h"
 #include "range_popup.h"
+#include "timeseries_popup.h"
 #include <X11/Xlib.h>
 #include <X11/Intrinsic.h>
 #include <X11/StringDefs.h>
@@ -135,6 +136,8 @@ static RenderModeCallback render_mode_cb = NULL;
 
 typedef void (*RangeButtonCallback)(void);
 static RangeButtonCallback range_button_cb = NULL;
+
+static MouseClickCallback mouse_click_cb = NULL;
 
 /* Render mode button */
 static Widget render_mode_button = NULL;
@@ -287,6 +290,13 @@ static void image_motion_callback(Widget w, XtPointer client_data, XEvent *event
     (void)w; (void)client_data; (void)cont;
     if (event->type == MotionNotify && mouse_motion_cb) {
         mouse_motion_cb(event->xmotion.x, event->xmotion.y);
+    }
+}
+
+static void image_click_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
+    (void)w; (void)client_data; (void)cont;
+    if (event->type == ButtonPress && event->xbutton.button == Button1 && mouse_click_cb) {
+        mouse_click_cb(event->xbutton.x, event->xbutton.y);
     }
 }
 
@@ -702,6 +712,10 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     image_gc = XCreateGC(display, XtWindow(image_widget), 0, NULL);
     XtAddEventHandler(image_widget, ExposureMask, False, image_expose_callback, NULL);
     XtAddEventHandler(image_widget, PointerMotionMask, False, image_motion_callback, NULL);
+    XtAddEventHandler(image_widget, ButtonPressMask, False, image_click_callback, NULL);
+
+    /* Initialize timeseries popup */
+    timeseries_popup_init(top_level, display, app_context);
 
     return 0;
 }
@@ -721,6 +735,11 @@ void x_set_save_callback(void (*cb)(void)) { save_cb = cb; }
 void x_set_dim_nav_callback(DimNavCallback cb) { dim_nav_cb = cb; }
 void x_set_render_mode_callback(void (*cb)(void)) { render_mode_cb = cb; }
 void x_set_range_button_callback(void (*cb)(void)) { range_button_cb = cb; }
+void x_set_mouse_click_callback(MouseClickCallback cb) { mouse_click_cb = cb; }
+
+void x_show_timeseries(const TSData *data) {
+    timeseries_popup_show(data);
+}
 
 void x_update_render_mode_label(const char *mode_name) {
     if (render_mode_button && mode_name) {
@@ -1234,6 +1253,7 @@ void x_main_loop(void) {
 
 void x_cleanup(void) {
     x_clear_timer();
+    timeseries_popup_cleanup();
     range_popup_cleanup();
 
     if (ximage) {

@@ -51,6 +51,7 @@ static void animation_tick(void);
 static void update_dim_info_current(void);
 static void update_dim_label(void);
 static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
+static void on_mouse_click(int px, int py);
 
 /* Callbacks */
 static void on_var_select(int var_index) {
@@ -229,6 +230,134 @@ static void on_mouse_motion(int px, int py) {
 
     /* Update display */
     x_update_value_label(lon, lat, value);
+}
+
+static void on_mouse_click(int px, int py) {
+    if (!view || !view->regrid || !view->regridded_data || !current_var) return;
+
+    /* Polygon-only mode: no regrid → no pixel-to-node mapping */
+    if (view->render_mode == RENDER_MODE_POLYGON) {
+        printf("Time series not available in polygon mode\n");
+        return;
+    }
+
+    /* Need at least 2 time steps for a meaningful plot */
+    if (view->n_times <= 1) {
+        printf("Only 1 time step, no time series to display\n");
+        return;
+    }
+
+    /* Convert pixel coordinates to data grid coordinates */
+    int scale = view->scale_factor;
+    size_t data_x = px / scale;
+    size_t data_y = py / scale;
+
+    if (data_x >= view->data_nx || data_y >= view->data_ny) return;
+
+    /* Flip Y for display */
+    size_t src_y = view->data_ny - 1 - data_y;
+
+    /* Check valid mask */
+    size_t grid_idx = src_y * view->data_nx + data_x;
+    if (!view->regrid->valid_mask[grid_idx]) return;
+
+    /* Get source mesh node index from nn_indices */
+    size_t node_idx = view->regrid->nn_indices[grid_idx];
+
+    /* Get lon/lat for display */
+    double lon, lat;
+    regrid_get_lonlat(view->regrid, data_x, src_y, &lon, &lat);
+
+    printf("Extracting time series at lon=%.2f, lat=%.2f (node %zu)...\n", lon, lat, node_idx);
+
+    /* Read time series data */
+    double *times = NULL;
+    float *values = NULL;
+    int *valid = NULL;
+    size_t n_out = 0;
+    int rc;
+
+#ifdef HAVE_ZARR
+    if (zarr_fileset) {
+        rc = zarr_read_timeseries_fileset(zarr_fileset, current_var, node_idx,
+                                          view->depth_index, &times, &values, &valid, &n_out);
+    } else if (current_var->file && current_var->file->file_type == FILE_TYPE_ZARR) {
+        rc = zarr_read_timeseries(current_var, node_idx, view->depth_index,
+                                  &times, &values, &valid, &n_out);
+    } else
+#endif
+    if (fileset) {
+        rc = netcdf_read_timeseries_fileset(fileset, current_var, node_idx,
+                                            view->depth_index, &times, &values, &valid, &n_out);
+    } else {
+        rc = netcdf_read_timeseries(current_var, node_idx, view->depth_index,
+                                    &times, &values, &valid, &n_out);
+    }
+
+    if (rc != 0 || n_out == 0) {
+        printf("Failed to read time series\n");
+        free(times); free(values); free(valid);
+        return;
+    }
+
+    /* Build TSData */
+    TSData ts_data;
+    memset(&ts_data, 0, sizeof(ts_data));
+    ts_data.times = times;
+    ts_data.values = values;
+    ts_data.valid = valid;
+    ts_data.n_points = n_out;
+
+    /* Count valid points */
+    ts_data.n_valid = 0;
+    for (size_t i = 0; i < n_out; i++) {
+        if (valid[i]) ts_data.n_valid++;
+    }
+
+    /* Build title */
+    if (current_var->units[0]) {
+        snprintf(ts_data.title, sizeof(ts_data.title), "%s (%s) at %.2f, %.2f",
+                 current_var->name, current_var->units, lon, lat);
+    } else {
+        snprintf(ts_data.title, sizeof(ts_data.title), "%s at %.2f, %.2f",
+                 current_var->name, lon, lat);
+    }
+
+    /* Build axis labels from dimension info */
+    ts_data.x_label[0] = '\0';
+    ts_data.y_label[0] = '\0';
+
+    if (current_dim_info && current_var->time_dim_id >= 0) {
+        const char *time_dim_name = current_var->dim_names[current_var->time_dim_id];
+        for (int i = 0; i < n_current_dims; i++) {
+            if (strcmp(current_dim_info[i].name, time_dim_name) == 0) {
+                if (current_dim_info[i].units[0]) {
+                    strncpy(ts_data.x_label, current_dim_info[i].units, sizeof(ts_data.x_label) - 1);
+                }
+                break;
+            }
+        }
+    }
+    if (!ts_data.x_label[0]) {
+        strncpy(ts_data.x_label, "Time Step", sizeof(ts_data.x_label) - 1);
+    }
+
+    if (current_var->units[0]) {
+        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%s (%s)",
+                 current_var->name, current_var->units);
+    } else {
+        strncpy(ts_data.y_label, current_var->name, sizeof(ts_data.y_label) - 1);
+    }
+
+    printf("Time series: %zu points (%zu valid)\n", n_out, ts_data.n_valid);
+
+    /* Show popup */
+    x_show_timeseries(&ts_data);
+
+    /* Free data (popup makes a deep copy) */
+    free(times);
+    free(values);
+    free(valid);
 }
 
 static void on_range_adjust(int action) {
@@ -950,6 +1079,7 @@ int main(int argc, char *argv[]) {
     x_set_dim_nav_callback(on_dim_nav);
     x_set_render_mode_callback(on_render_mode_toggle);
     x_set_range_button_callback(on_range_button);
+    x_set_mouse_click_callback(on_mouse_click);
 
     /* Create view */
     view = view_create();

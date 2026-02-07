@@ -11,6 +11,7 @@
 #include <strings.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
 
 /* Dimension name patterns */
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
@@ -110,6 +111,82 @@ static int is_coord_dim(int ncid __attribute__((unused)), const char *dimname) {
         NULL
     };
     return matches_name_list(dimname, COORD_DIMS);
+}
+
+/*
+ * CF time unit parsing and conversion helpers.
+ * Used to normalize time values when files have different epochs.
+ */
+
+static int parse_cf_time_units(const char *units, double *unit_seconds,
+                               int *y, int *mo, int *d, int *h, int *mi, double *sec) {
+    if (!units || !unit_seconds || !y || !mo || !d || !h || !mi || !sec) return 0;
+    const char *since = strstr(units, "since");
+    if (!since) return 0;
+
+    char unit_buf[32] = {0};
+    if (sscanf(units, "%31s", unit_buf) != 1) return 0;
+    for (char *p = unit_buf; *p; ++p)
+        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+
+    if (strcmp(unit_buf, "seconds") == 0 || strcmp(unit_buf, "second") == 0 ||
+        strcmp(unit_buf, "secs") == 0 || strcmp(unit_buf, "sec") == 0 || strcmp(unit_buf, "s") == 0)
+        *unit_seconds = 1.0;
+    else if (strcmp(unit_buf, "minutes") == 0 || strcmp(unit_buf, "minute") == 0 ||
+             strcmp(unit_buf, "mins") == 0 || strcmp(unit_buf, "min") == 0)
+        *unit_seconds = 60.0;
+    else if (strcmp(unit_buf, "hours") == 0 || strcmp(unit_buf, "hour") == 0 ||
+             strcmp(unit_buf, "hrs") == 0 || strcmp(unit_buf, "hr") == 0)
+        *unit_seconds = 3600.0;
+    else if (strcmp(unit_buf, "days") == 0 || strcmp(unit_buf, "day") == 0)
+        *unit_seconds = 86400.0;
+    else
+        return 0;
+
+    const char *p = since + 5;
+    while (*p == ' ') p++;
+    int n = sscanf(p, "%d-%d-%d %d:%d:%lf", y, mo, d, h, mi, sec);
+    if (n < 3) return 0;
+    if (n == 3) { *h = 0; *mi = 0; *sec = 0.0; }
+    return 1;
+}
+
+static int64_t nc_days_from_civil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int64_t)(era * 146097 + (int)doe - 719468);
+}
+
+/*
+ * Convert a CF time value from src_units to dst_units.
+ * E.g., value=0 in "days since 1960-01-01" → 3652.0 in "days since 1950-01-01"
+ * Returns the converted value, or the original if parsing fails.
+ */
+static double convert_time_units(double value, const char *src_units, const char *dst_units) {
+    if (!src_units || !dst_units) return value;
+    if (strcmp(src_units, dst_units) == 0) return value;
+
+    double src_unit_sec, dst_unit_sec;
+    int sy, smo, sd, sh, smi, dy, dmo, dd, dh, dmi;
+    double ssec, dsec;
+
+    if (!parse_cf_time_units(src_units, &src_unit_sec, &sy, &smo, &sd, &sh, &smi, &ssec))
+        return value;
+    if (!parse_cf_time_units(dst_units, &dst_unit_sec, &dy, &dmo, &dd, &dh, &dmi, &dsec))
+        return value;
+
+    /* Convert to absolute seconds */
+    double src_epoch = (double)nc_days_from_civil(sy, (unsigned)smo, (unsigned)sd) * 86400.0
+                     + sh * 3600.0 + smi * 60.0 + ssec;
+    double abs_sec = src_epoch + value * src_unit_sec;
+
+    /* Convert to destination units */
+    double dst_epoch = (double)nc_days_from_civil(dy, (unsigned)dmo, (unsigned)dd) * 86400.0
+                     + dh * 3600.0 + dmi * 60.0 + dsec;
+    return (abs_sec - dst_epoch) / dst_unit_sec;
 }
 
 USFile *netcdf_open(const char *filename) {
@@ -737,7 +814,10 @@ USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_ou
             if (dims[i].values) {
                 size_t offset = 0;
 
-                /* Collect time values from all files */
+                /* Reference units from file 0 (stored in dims[i].units) */
+                const char *ref_units = dims[i].units;
+
+                /* Collect time values from all files, normalizing to file 0 units */
                 for (int f = 0; f < fs->n_files; f++) {
                     int ncid = fs->files[f]->ncid;
                     int coord_varid;
@@ -747,10 +827,18 @@ USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_ou
                         double *file_values = malloc(file_times * sizeof(double));
                         if (file_values) {
                             if (nc_get_var_double(ncid, coord_varid, file_values) == NC_NOERR) {
-                                memcpy(&dims[i].values[offset], file_values,
-                                       file_times * sizeof(double));
+                                /* Read this file's time units */
+                                char file_units[MAX_NAME_LEN] = {0};
+                                get_att_text(ncid, coord_varid, "units",
+                                             file_units, sizeof(file_units));
+
+                                /* Convert to reference units if different */
+                                for (size_t t = 0; t < file_times; t++) {
+                                    dims[i].values[offset + t] =
+                                        convert_time_units(file_values[t],
+                                                           file_units, ref_units);
+                                }
                             } else {
-                                /* Fall back to indices */
                                 for (size_t t = 0; t < file_times; t++) {
                                     dims[i].values[offset + t] = (double)(offset + t);
                                 }
@@ -758,7 +846,6 @@ USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_ou
                             free(file_values);
                         }
                     } else {
-                        /* No coordinate variable, use indices */
                         for (size_t t = 0; t < file_times; t++) {
                             dims[i].values[offset + t] = (double)(offset + t);
                         }
@@ -776,6 +863,274 @@ USDimInfo *netcdf_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_ou
     }
 
     return dims;
+}
+
+int netcdf_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
+                           double **times_out, float **values_out,
+                           int **valid_out, size_t *n_out) {
+    if (!var || !var->file || !var->mesh || !times_out || !values_out || !valid_out || !n_out)
+        return -1;
+
+    *times_out = NULL;
+    *values_out = NULL;
+    *valid_out = NULL;
+    *n_out = 0;
+
+    int ncid = var->file->ncid;
+    size_t n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
+    if (n_times == 0) return -1;
+
+    /* Allocate output arrays */
+    double *times = calloc(n_times, sizeof(double));
+    float *values = calloc(n_times, sizeof(float));
+    int *valid = calloc(n_times, sizeof(int));
+    if (!times || !values || !valid) {
+        free(times); free(values); free(valid);
+        return -1;
+    }
+
+    /* Decompose node_idx for structured grids (lat/lon dimensions) */
+    size_t lat_idx = 0, lon_idx = 0;
+    int is_structured = 0;
+    if (var->mesh->coord_type != COORD_TYPE_1D_UNSTRUCTURED &&
+        var->mesh->orig_nx > 0 && var->mesh->orig_ny > 0) {
+        is_structured = 1;
+        lon_idx = node_idx % var->mesh->orig_nx;
+        lat_idx = node_idx / var->mesh->orig_nx;
+    }
+
+    /* Get scale_factor and add_offset */
+    float scale = 1.0f, offset = 0.0f;
+    nc_get_att_float(ncid, var->varid, "scale_factor", &scale);
+    nc_get_att_float(ncid, var->varid, "add_offset", &offset);
+
+    /* Read values for each time step using a single-point hyperslab per step */
+    for (size_t t = 0; t < n_times; t++) {
+        size_t start[MAX_DIMS] = {0};
+        size_t count[MAX_DIMS];
+        float val;
+
+        for (int d = 0; d < var->n_dims; d++) {
+            if (d == var->time_dim_id) {
+                start[d] = t;
+                count[d] = 1;
+            } else if (d == var->depth_dim_id) {
+                start[d] = depth_idx;
+                count[d] = 1;
+            } else if (is_structured) {
+                /* Find if this is the lat or lon dimension */
+                if (matches_name_list(var->dim_names[d], LAT_NAMES)) {
+                    start[d] = lat_idx;
+                    count[d] = 1;
+                } else if (matches_name_list(var->dim_names[d], LON_NAMES)) {
+                    start[d] = lon_idx;
+                    count[d] = 1;
+                } else {
+                    start[d] = node_idx;
+                    count[d] = 1;
+                }
+            } else {
+                /* Unstructured: node dimension */
+                start[d] = node_idx;
+                count[d] = 1;
+            }
+        }
+
+        int status = nc_get_vara_float(ncid, var->varid, start, count, &val);
+        if (status != NC_NOERR) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+            continue;
+        }
+
+        /* Apply scale_factor/add_offset */
+        if (fabsf(val - var->fill_value) < 1e-6f * fabsf(var->fill_value) ||
+            fabsf(val) > INVALID_DATA_THRESHOLD) {
+            values[t] = var->fill_value;
+            valid[t] = 0;
+        } else {
+            if (scale != 1.0f || offset != 0.0f)
+                val = val * scale + offset;
+            values[t] = val;
+            valid[t] = 1;
+        }
+    }
+
+    /* Read time coordinate values */
+    if (var->time_dim_id >= 0) {
+        int coord_varid;
+        if (nc_inq_varid(ncid, var->dim_names[var->time_dim_id], &coord_varid) == NC_NOERR) {
+            nc_get_var_double(ncid, coord_varid, times);
+        } else {
+            for (size_t t = 0; t < n_times; t++)
+                times[t] = (double)t;
+        }
+    } else {
+        times[0] = 0.0;
+    }
+
+    *times_out = times;
+    *values_out = values;
+    *valid_out = valid;
+    *n_out = n_times;
+    return 0;
+}
+
+int netcdf_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                   size_t node_idx, size_t depth_idx,
+                                   double **times_out, float **values_out,
+                                   int **valid_out, size_t *n_out) {
+    if (!fs || !var || !times_out || !values_out || !valid_out || !n_out)
+        return -1;
+
+    *times_out = NULL;
+    *values_out = NULL;
+    *valid_out = NULL;
+    *n_out = 0;
+
+    size_t total = fs->total_times;
+    if (total == 0) return -1;
+
+    double *times = calloc(total, sizeof(double));
+    float *values = calloc(total, sizeof(float));
+    int *valid = calloc(total, sizeof(int));
+    if (!times || !values || !valid) {
+        free(times); free(values); free(valid);
+        return -1;
+    }
+
+    /* Decompose node_idx for structured grids */
+    size_t lat_idx = 0, lon_idx = 0;
+    int is_structured = 0;
+    if (var->mesh->coord_type != COORD_TYPE_1D_UNSTRUCTURED &&
+        var->mesh->orig_nx > 0 && var->mesh->orig_ny > 0) {
+        is_structured = 1;
+        lon_idx = node_idx % var->mesh->orig_nx;
+        lat_idx = node_idx / var->mesh->orig_nx;
+    }
+
+    /* Get reference time units from file 0 */
+    char ref_time_units[MAX_NAME_LEN] = {0};
+    if (var->time_dim_id >= 0) {
+        int coord_varid;
+        if (nc_inq_varid(fs->files[0]->ncid, var->dim_names[var->time_dim_id],
+                         &coord_varid) == NC_NOERR) {
+            get_att_text(fs->files[0]->ncid, coord_varid, "units",
+                         ref_time_units, sizeof(ref_time_units));
+        }
+    }
+
+    size_t out_idx = 0;
+    for (int f = 0; f < fs->n_files; f++) {
+        USFile *file = fs->files[f];
+        int ncid = file->ncid;
+        size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
+
+        /* Find variable in this file */
+        int varid = var->varid;
+        if (f > 0) {
+            if (nc_inq_varid(ncid, var->name, &varid) != NC_NOERR) {
+                /* Variable not found in this file, fill with invalid */
+                for (size_t t = 0; t < file_times; t++) {
+                    times[out_idx + t] = (double)(out_idx + t);
+                    values[out_idx + t] = var->fill_value;
+                    valid[out_idx + t] = 0;
+                }
+                out_idx += file_times;
+                continue;
+            }
+        }
+
+        /* Get scale_factor and add_offset for this file */
+        float scale = 1.0f, offset = 0.0f;
+        nc_get_att_float(ncid, varid, "scale_factor", &scale);
+        nc_get_att_float(ncid, varid, "add_offset", &offset);
+
+        /* Read time coordinate from this file, normalizing to file 0 units */
+        if (var->time_dim_id >= 0) {
+            int coord_varid;
+            if (nc_inq_varid(ncid, var->dim_names[var->time_dim_id], &coord_varid) == NC_NOERR) {
+                double *file_times_vals = malloc(file_times * sizeof(double));
+                if (file_times_vals) {
+                    if (nc_get_var_double(ncid, coord_varid, file_times_vals) == NC_NOERR) {
+                        /* Read this file's time units and convert if needed */
+                        char file_units[MAX_NAME_LEN] = {0};
+                        get_att_text(ncid, coord_varid, "units",
+                                     file_units, sizeof(file_units));
+                        for (size_t t = 0; t < file_times; t++) {
+                            times[out_idx + t] =
+                                convert_time_units(file_times_vals[t],
+                                                   file_units, ref_time_units);
+                        }
+                    } else {
+                        for (size_t t = 0; t < file_times; t++)
+                            times[out_idx + t] = (double)(out_idx + t);
+                    }
+                    free(file_times_vals);
+                }
+            } else {
+                for (size_t t = 0; t < file_times; t++)
+                    times[out_idx + t] = (double)(out_idx + t);
+            }
+        }
+
+        /* Read value at each time step */
+        for (size_t t = 0; t < file_times; t++) {
+            size_t start[MAX_DIMS] = {0};
+            size_t count[MAX_DIMS];
+            float val;
+
+            for (int d = 0; d < var->n_dims; d++) {
+                if (d == var->time_dim_id) {
+                    start[d] = t;
+                    count[d] = 1;
+                } else if (d == var->depth_dim_id) {
+                    start[d] = depth_idx;
+                    count[d] = 1;
+                } else if (is_structured) {
+                    if (matches_name_list(var->dim_names[d], LAT_NAMES)) {
+                        start[d] = lat_idx;
+                        count[d] = 1;
+                    } else if (matches_name_list(var->dim_names[d], LON_NAMES)) {
+                        start[d] = lon_idx;
+                        count[d] = 1;
+                    } else {
+                        start[d] = node_idx;
+                        count[d] = 1;
+                    }
+                } else {
+                    start[d] = node_idx;
+                    count[d] = 1;
+                }
+            }
+
+            int status = nc_get_vara_float(ncid, varid, start, count, &val);
+            if (status != NC_NOERR) {
+                values[out_idx + t] = var->fill_value;
+                valid[out_idx + t] = 0;
+                continue;
+            }
+
+            if (fabsf(val - var->fill_value) < 1e-6f * fabsf(var->fill_value) ||
+                fabsf(val) > INVALID_DATA_THRESHOLD) {
+                values[out_idx + t] = var->fill_value;
+                valid[out_idx + t] = 0;
+            } else {
+                if (scale != 1.0f || offset != 0.0f)
+                    val = val * scale + offset;
+                values[out_idx + t] = val;
+                valid[out_idx + t] = 1;
+            }
+        }
+
+        out_idx += file_times;
+    }
+
+    *times_out = times;
+    *values_out = values;
+    *valid_out = valid;
+    *n_out = total;
+    return 0;
 }
 
 void netcdf_close_fileset(USFileSet *fs) {

@@ -93,5 +93,21 @@ USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
  */
 void zarr_close_fileset(USFileSet *fs);
 
+/*
+ * Read time series at a single spatial node across all time steps.
+ * Reads one slice per time step and extracts the node value.
+ */
+int zarr_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
+                         double **times_out, float **values_out,
+                         int **valid_out, size_t *n_out);
+
+/*
+ * Read time series at a single spatial node across all files in a fileset.
+ */
+int zarr_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                 size_t node_idx, size_t depth_idx,
+                                 double **times_out, float **values_out,
+                                 int **valid_out, size_t *n_out);
+
 #endif /* HAVE_ZARR */
 #endif /* FILE_ZARR_H */
