@@ -12,6 +12,9 @@
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
+#ifdef HAVE_GRIB
+#include "file_grib.h"
+#endif
 #include "colormaps.h"
 #include "view.h"
 #include "term_render_mode.h"
@@ -209,7 +212,7 @@ static int sample_field(size_t sx, size_t sy, size_t sub_cols, size_t sub_rows,
 }
 
 static void print_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [options] <data_file.nc|data.zarr> [file2 ...]\n\n", prog);
+    fprintf(stderr, "Usage: %s [options] <data_file.nc|data.grib|data.zarr> [file2 ...]\n\n", prog);
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -m, --mesh <file>      Mesh file with coordinates\n");
     fprintf(stderr, "  -r, --resolution <deg> Target grid resolution (default: 1.0)\n");
@@ -558,6 +561,17 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
         }
     }
 
+#ifdef HAVE_GRIB
+    if (!use_glob && n_data_files == 1 && grib_is_grib_file(data_filenames[0])) {
+        file = grib_open(data_filenames[0]);
+        if (!file) {
+            fprintf(stderr, "Failed to open GRIB file: %s\n", data_filenames[0]);
+            return -1;
+        }
+        return 0;
+    }
+#endif
+
 #ifdef HAVE_ZARR
     if (n_data_files == 1 && !use_glob && zarr_is_zarr_store(data_filenames[0])) {
         file = zarr_open(data_filenames[0]);
@@ -646,6 +660,12 @@ static void cleanup_all(void) {
         zarr_fileset = NULL;
     } else if (file && file->file_type == FILE_TYPE_ZARR) {
         zarr_close(file);
+        file = NULL;
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (file && file->file_type == FILE_TYPE_GRIB) {
+        grib_close(file);
         file = NULL;
     } else
 #endif
@@ -752,6 +772,11 @@ int main(int argc, char *argv[]) {
         mesh = mesh_create_from_zarr(file);
     } else
 #endif
+#ifdef HAVE_GRIB
+    if (file->file_type == FILE_TYPE_GRIB) {
+        mesh = grib_create_mesh(file);
+    } else
+#endif
     {
         mesh = mesh_create_from_netcdf(file->ncid, mesh_filename);
     }
@@ -772,6 +797,11 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_ZARR
     if (file->file_type == FILE_TYPE_ZARR) {
         variables = zarr_scan_variables(file, mesh);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (file->file_type == FILE_TYPE_GRIB) {
+        variables = grib_scan_variables(file, mesh);
     } else
 #endif
     {

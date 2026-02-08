@@ -48,6 +48,9 @@ typedef enum {
 #ifdef HAVE_ZARR
     FILE_TYPE_ZARR,
 #endif
+#ifdef HAVE_GRIB
+    FILE_TYPE_GRIB,
+#endif
 } FileType;
 
 /* Forward declarations */
@@ -145,6 +148,11 @@ struct USVar {
     void       *zarr_data;          /* ZarrArray* for zarr variables */
 #endif
 
+#ifdef HAVE_GRIB
+    /* GRIB-specific */
+    void       *grib_data;          /* GribVarData* for grib variables */
+#endif
+
     /* Linked list */
     USVar      *next;
 };
@@ -161,6 +169,11 @@ struct USFile {
 #ifdef HAVE_ZARR
     /* Zarr-specific */
     void       *zarr_data;          /* ZarrStore* for zarr files */
+#endif
+
+#ifdef HAVE_GRIB
+    /* GRIB-specific */
+    void       *grib_data;          /* GribFileData* for grib files */
 #endif
 
     /* Variables in this file */

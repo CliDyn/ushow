@@ -31,12 +31,18 @@ For optional Zarr support:
 brew install c-blosc lz4
 ```
 
+For optional GRIB support:
+```bash
+brew install eccodes
+```
+
 Install [XQuartz](https://www.xquartz.org/) for X11 support. After installation, the X11 libraries will be in `/opt/X11`.
 
 Build:
 ```bash
-make                  # Without zarr support
+make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support
+make WITH_GRIB=1      # With grib support
 make uterm            # Build terminal viewer only
 ```
 
@@ -54,10 +60,16 @@ For optional Zarr support:
 sudo apt-get install libblosc-dev liblz4-dev
 ```
 
+For optional GRIB support:
+```bash
+sudo apt-get install libeccodes-dev
+```
+
 Build:
 ```bash
-make                  # Without zarr support
+make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support
+make WITH_GRIB=1      # With grib support
 make uterm            # Build terminal viewer only
 ```
 
@@ -69,8 +81,9 @@ On Levante, the Makefile automatically uses the DKRZ spack-installed libraries:
 
 No modules need to be loaded. Simply run:
 ```bash
-make                  # Without zarr support
+make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support (uses system blosc/lz4)
+make WITH_GRIB=1      # With grib support (uses system eccodes)
 ```
 
 The binary will have the library paths embedded (via rpath), so it runs without setting `LD_LIBRARY_PATH`.
@@ -103,7 +116,7 @@ No libraries should show as "not found".
 ## Usage
 
 ```bash
-./ushow [options] <data_file.nc|data.zarr> [file2 ...]
+./ushow [options] <data_file.nc|data.zarr|data.grib> [file2 ...]
 
 Options:
   -m, --mesh <file>      Mesh file with coordinates (for unstructured data)
@@ -115,7 +128,7 @@ Options:
 
 Terminal quick-look mode:
 ```bash
-./uterm [options] <data_file.nc|data.zarr> [file2 ...]
+./uterm [options] <data_file.nc|data.zarr|data.grib> [file2 ...]
 
 Options (uterm):
   -m, --mesh <file>      Mesh file with coordinates
@@ -157,6 +170,12 @@ Zarr store (requires `make WITH_ZARR=1`):
 ./ushow data.zarr                      # Single zarr store
 ./ushow "data_*.zarr"                  # Multiple zarr stores (time concat)
 ./ushow data.zarr -r 0.25              # Higher resolution display
+```
+
+GRIB file (requires `make WITH_GRIB=1`):
+```bash
+./ushow data.grib                      # Single GRIB file
+./uterm data.grib --color
 ```
 
 Zarr store with consolidated metadata (faster loading):
