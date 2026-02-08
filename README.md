@@ -1,14 +1,19 @@
 # ushow - Unstructured Data Viewer
+The `ushow` command uses X11 to display data:
 ![usow_example](https://github.com/user-attachments/assets/125165e5-b3e1-4cb4-a728-5f39cf7838b3)
+
+The `uterm` command displays data in the terminal using ASCII or UTF characters.
+![uterm](https://github.com/user-attachments/assets/28720ba7-173f-428a-a02a-61582aee6aec)
 
 A fast, ncview‑inspired visualization tool for structured and unstructured geoscientific data.
 
 ## Features
 
+- **Multiple formats**: Supports netCDF, zarr and GRIB
 - **Unified data handling**: Treats all data as collections of points with lon/lat coordinates
 - **Fast visualization**: KDTree-based nearest-neighbor interpolation to regular grid
 - **X11/Xaw interface**: Works over SSH with X forwarding
-- **Terminal quick-look mode**: Separate `uterm` binary with raw terminal interaction
+- **Terminal quick-look mode**: Separate `uterm` binary with raw terminal interaction (no X is needed)
 - **Animation support**: Step through time dimensions
 - **Multiple colormaps**: viridis, hot, grayscale, plus the full cmocean set
 
@@ -16,6 +21,7 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 
 Requirements:
 - NetCDF-C library
+- eccodes for GRIB support (can be build without)
 - X11 development libraries (libX11, libXt, libXaw, libXmu, libXext, libSM, libICE)
 - C compiler (gcc or clang)
 
