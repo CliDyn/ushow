@@ -403,7 +403,11 @@ int view_update(USView *view) {
     } else
 #endif
 #ifdef HAVE_GRIB
-    if (view->variable->file && view->variable->file->file_type == FILE_TYPE_GRIB) {
+    if (view->fileset && view->fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        read_result = grib_read_slice_fileset(view->fileset, view->variable,
+                                              view->time_index, view->depth_index,
+                                              view->raw_data);
+    } else if (view->variable->file && view->variable->file->file_type == FILE_TYPE_GRIB) {
         read_result = grib_read_slice(view->variable, view->time_index,
                                       view->depth_index, view->raw_data);
     } else

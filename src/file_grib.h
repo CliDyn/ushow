@@ -73,5 +73,60 @@ int grib_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
                          double **times_out, float **values_out,
                          int **valid_out, size_t *n_out);
 
+/*
+ * Multi-file support
+ */
+
+/*
+ * Create a file set from an array of GRIB filenames.
+ * Files are opened and sorted alphabetically by filename.
+ * Returns NULL on error.
+ */
+USFileSet *grib_open_fileset(const char **filenames, int n_files);
+
+/*
+ * Create a file set from a glob pattern (e.g., "data.*.grb").
+ * Returns NULL on error or if no files match.
+ */
+USFileSet *grib_open_glob(const char *pattern);
+
+/*
+ * Map a virtual time index to file index and local time index.
+ * Returns 0 on success, -1 on error (index out of range).
+ */
+int grib_fileset_map_time(USFileSet *fs, size_t virtual_time,
+                          int *file_idx_out, size_t *local_time_out);
+
+/*
+ * Read a slice from a file set using virtual time index.
+ * var must be from the first file (fs->files[0]).
+ */
+int grib_read_slice_fileset(USFileSet *fs, USVar *var,
+                            size_t virtual_time, size_t depth_idx, float *data);
+
+/*
+ * Get total time steps across all files.
+ */
+size_t grib_fileset_total_times(USFileSet *fs);
+
+/*
+ * Get dimension info with virtual time from fileset.
+ */
+USDimInfo *grib_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out);
+
+/*
+ * Close all files in a file set.
+ */
+void grib_close_fileset(USFileSet *fs);
+
+/*
+ * Read time series at a single spatial node across all files in a fileset.
+ * Same interface as grib_read_timeseries but concatenates across files.
+ */
+int grib_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                 size_t node_idx, size_t depth_idx,
+                                 double **times_out, float **values_out,
+                                 int **valid_out, size_t *n_out);
+
 #endif /* HAVE_GRIB */
 #endif /* FILE_GRIB_H */

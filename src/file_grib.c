@@ -998,4 +998,363 @@ void grib_close(USFile *file) {
     free(file);
 }
 
+/* ---- Multi-file GRIB support ---- */
+
+#include <glob.h>
+
+static int compare_strings_grib(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+/* Count unique time values across all messages in a GRIB file */
+static size_t grib_count_unique_times(GribFileData *gfile) {
+    if (!gfile || gfile->n_messages <= 0) return 1;
+
+    double *times = NULL;
+    size_t n_times = 0;
+    size_t cap = 0;
+
+    for (int i = 0; i < gfile->n_messages; i++) {
+        codes_handle *h = grib_handle_from_offset(gfile, gfile->offsets[i]);
+        if (!h) continue;
+
+        double time_val;
+        if (grib_get_time_value(h, &time_val)) {
+            int found = 0;
+            for (size_t t = 0; t < n_times; t++) {
+                if (times[t] == time_val) { found = 1; break; }
+            }
+            if (!found) {
+                if (n_times == cap) {
+                    size_t new_cap = cap == 0 ? 16 : cap * 2;
+                    double *new_times = realloc(times, new_cap * sizeof(double));
+                    if (!new_times) {
+                        codes_handle_delete(h);
+                        break;
+                    }
+                    times = new_times;
+                    cap = new_cap;
+                }
+                times[n_times++] = time_val;
+            }
+        }
+        codes_handle_delete(h);
+    }
+
+    free(times);
+    return n_times > 0 ? n_times : 1;
+}
+
+/* Find a variable by name in a file's variable list */
+static USVar *grib_find_var(USFile *file, const char *name) {
+    if (!file || !name) return NULL;
+    for (USVar *v = file->vars; v; v = v->next) {
+        if (strcmp(v->name, name) == 0) return v;
+    }
+    return NULL;
+}
+
+USFileSet *grib_open_fileset(const char **filenames, int n_files) {
+    if (!filenames || n_files <= 0) return NULL;
+
+    USFileSet *fs = calloc(1, sizeof(USFileSet));
+    if (!fs) return NULL;
+
+    fs->files = calloc(n_files, sizeof(USFile *));
+    fs->time_offsets = calloc(n_files + 1, sizeof(size_t));
+    if (!fs->files || !fs->time_offsets) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+
+    /* Create sorted copy of filenames */
+    char **sorted = malloc(n_files * sizeof(char *));
+    if (!sorted) {
+        free(fs->files);
+        free(fs->time_offsets);
+        free(fs);
+        return NULL;
+    }
+    for (int i = 0; i < n_files; i++) {
+        sorted[i] = strdup(filenames[i]);
+    }
+    qsort(sorted, n_files, sizeof(char *), compare_strings_grib);
+
+    /* Open each file and count time steps */
+    fs->time_offsets[0] = 0;
+    for (int i = 0; i < n_files; i++) {
+        printf("Opening GRIB file %d/%d: %s\n", i + 1, n_files, sorted[i]);
+        fs->files[i] = grib_open(sorted[i]);
+        if (!fs->files[i]) {
+            fprintf(stderr, "Failed to open GRIB file: %s\n", sorted[i]);
+            for (int j = 0; j < i; j++) {
+                grib_close(fs->files[j]);
+            }
+            for (int j = 0; j < n_files; j++) free(sorted[j]);
+            free(sorted);
+            free(fs->files);
+            free(fs->time_offsets);
+            free(fs);
+            return NULL;
+        }
+
+        size_t time_size = grib_count_unique_times(
+            (GribFileData *)fs->files[i]->grib_data);
+        fs->time_offsets[i + 1] = fs->time_offsets[i] + time_size;
+        printf("  GRIB file %d: %zu time steps (offset %zu)\n",
+               i, time_size, fs->time_offsets[i]);
+    }
+
+    fs->n_files = n_files;
+    fs->total_times = fs->time_offsets[n_files];
+    fs->base_filename = strdup(sorted[0]);
+
+    printf("Total virtual time steps: %zu across %d GRIB files\n",
+           fs->total_times, n_files);
+
+    for (int i = 0; i < n_files; i++) free(sorted[i]);
+    free(sorted);
+
+    return fs;
+}
+
+USFileSet *grib_open_glob(const char *pattern) {
+    if (!pattern) return NULL;
+
+    glob_t glob_result;
+    int ret = glob(pattern, GLOB_TILDE | GLOB_NOSORT, NULL, &glob_result);
+    if (ret != 0) {
+        if (ret == GLOB_NOMATCH)
+            fprintf(stderr, "No GRIB files match pattern: %s\n", pattern);
+        else
+            fprintf(stderr, "Glob error for pattern: %s\n", pattern);
+        return NULL;
+    }
+    if (glob_result.gl_pathc == 0) {
+        fprintf(stderr, "No GRIB files match pattern: %s\n", pattern);
+        globfree(&glob_result);
+        return NULL;
+    }
+
+    printf("GRIB pattern '%s' matched %zu files\n", pattern, glob_result.gl_pathc);
+
+    USFileSet *fs = grib_open_fileset((const char **)glob_result.gl_pathv,
+                                       (int)glob_result.gl_pathc);
+    globfree(&glob_result);
+    return fs;
+}
+
+int grib_fileset_map_time(USFileSet *fs, size_t virtual_time,
+                          int *file_idx_out, size_t *local_time_out) {
+    if (!fs || !file_idx_out || !local_time_out) return -1;
+    if (virtual_time >= fs->total_times) return -1;
+
+    int lo = 0, hi = fs->n_files - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (fs->time_offsets[mid] <= virtual_time)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+
+    *file_idx_out = lo;
+    *local_time_out = virtual_time - fs->time_offsets[lo];
+    return 0;
+}
+
+size_t grib_fileset_total_times(USFileSet *fs) {
+    return fs ? fs->total_times : 0;
+}
+
+int grib_read_slice_fileset(USFileSet *fs, USVar *var,
+                            size_t virtual_time, size_t depth_idx, float *data) {
+    if (!fs || !var || !data) return -1;
+
+    int file_idx;
+    size_t local_time;
+    if (grib_fileset_map_time(fs, virtual_time, &file_idx, &local_time) != 0) {
+        fprintf(stderr, "Invalid virtual time index: %zu\n", virtual_time);
+        return -1;
+    }
+
+    if (file_idx == 0) {
+        return grib_read_slice(var, local_time, depth_idx, data);
+    }
+
+    USFile *file = fs->files[file_idx];
+
+    /* Lazily scan variables for this file if not done yet */
+    if (!file->vars && var->mesh) {
+        grib_scan_variables(file, var->mesh);
+    }
+
+    /* Find matching variable by name */
+    USVar *file_var = grib_find_var(file, var->name);
+    if (!file_var) {
+        fprintf(stderr, "Variable '%s' not found in GRIB file %d\n",
+                var->name, file_idx);
+        return -1;
+    }
+
+    return grib_read_slice(file_var, local_time, depth_idx, data);
+}
+
+USDimInfo *grib_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out) {
+    if (!fs || !var || !n_dims_out || fs->n_files == 0) return NULL;
+
+    /* Get base dim info from the variable (file 0) */
+    USDimInfo *dims = grib_get_dim_info(var, n_dims_out);
+    if (!dims) return NULL;
+
+    /* Update time dimension with virtual total and concatenated values */
+    for (int i = 0; i < *n_dims_out; i++) {
+        if (var->time_dim_id >= 0 &&
+            strcmp(dims[i].name, GRIB_TIME_DIM_NAME) == 0) {
+            double *old_values = dims[i].values;
+
+            dims[i].size = fs->total_times;
+            dims[i].is_scannable = (fs->total_times > 1);
+
+            /* Concatenate time values from all files */
+            dims[i].values = malloc(fs->total_times * sizeof(double));
+            if (dims[i].values) {
+                size_t offset = 0;
+                for (int f = 0; f < fs->n_files; f++) {
+                    USFile *file = fs->files[f];
+                    size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
+
+                    /* Lazily scan variables if needed */
+                    if (!file->vars && var->mesh) {
+                        grib_scan_variables(file, var->mesh);
+                    }
+
+                    USVar *file_var = (f == 0) ? var : grib_find_var(file, var->name);
+                    if (file_var && file_var->grib_data) {
+                        GribVarData *fdata = (GribVarData *)file_var->grib_data;
+                        size_t copy_count = fdata->n_times < file_times ?
+                                            fdata->n_times : file_times;
+                        for (size_t t = 0; t < copy_count; t++) {
+                            dims[i].values[offset + t] = fdata->times[t];
+                        }
+                        for (size_t t = copy_count; t < file_times; t++) {
+                            dims[i].values[offset + t] = (double)(offset + t);
+                        }
+                    } else {
+                        for (size_t t = 0; t < file_times; t++) {
+                            dims[i].values[offset + t] = (double)(offset + t);
+                        }
+                    }
+                    offset += file_times;
+                }
+
+                dims[i].min_val = dims[i].values[0];
+                dims[i].max_val = dims[i].values[fs->total_times - 1];
+            }
+
+            free(old_values);
+            break;
+        }
+    }
+
+    return dims;
+}
+
+int grib_read_timeseries_fileset(USFileSet *fs, USVar *var,
+                                 size_t node_idx, size_t depth_idx,
+                                 double **times_out, float **values_out,
+                                 int **valid_out, size_t *n_out) {
+    if (!fs || !var || !times_out || !values_out || !valid_out || !n_out)
+        return -1;
+
+    *times_out = NULL;
+    *values_out = NULL;
+    *valid_out = NULL;
+    *n_out = 0;
+
+    size_t total = fs->total_times;
+    if (total == 0) return -1;
+
+    double *times = calloc(total, sizeof(double));
+    float *values = calloc(total, sizeof(float));
+    int *valid = calloc(total, sizeof(int));
+    if (!times || !values || !valid) {
+        free(times); free(values); free(valid);
+        return -1;
+    }
+
+    size_t out_idx = 0;
+    for (int f = 0; f < fs->n_files; f++) {
+        USFile *file = fs->files[f];
+        size_t file_times = fs->time_offsets[f + 1] - fs->time_offsets[f];
+
+        /* Lazily scan variables if needed */
+        if (!file->vars && var->mesh) {
+            grib_scan_variables(file, var->mesh);
+        }
+
+        USVar *file_var = (f == 0) ? var : grib_find_var(file, var->name);
+        if (!file_var) {
+            for (size_t t = 0; t < file_times; t++) {
+                times[out_idx + t] = (double)(out_idx + t);
+                values[out_idx + t] = var->fill_value;
+                valid[out_idx + t] = 0;
+            }
+            out_idx += file_times;
+            continue;
+        }
+
+        /* Read timeseries from this file */
+        double *file_ts_times = NULL;
+        float *file_ts_values = NULL;
+        int *file_ts_valid = NULL;
+        size_t file_ts_n = 0;
+
+        int rc = grib_read_timeseries(file_var, node_idx, depth_idx,
+                                       &file_ts_times, &file_ts_values,
+                                       &file_ts_valid, &file_ts_n);
+        if (rc != 0 || file_ts_n == 0) {
+            for (size_t t = 0; t < file_times; t++) {
+                times[out_idx + t] = (double)(out_idx + t);
+                values[out_idx + t] = var->fill_value;
+                valid[out_idx + t] = 0;
+            }
+        } else {
+            size_t copy_count = file_ts_n < file_times ? file_ts_n : file_times;
+            memcpy(&times[out_idx], file_ts_times, copy_count * sizeof(double));
+            memcpy(&values[out_idx], file_ts_values, copy_count * sizeof(float));
+            memcpy(&valid[out_idx], file_ts_valid, copy_count * sizeof(int));
+            for (size_t t = copy_count; t < file_times; t++) {
+                times[out_idx + t] = (double)(out_idx + t);
+                values[out_idx + t] = var->fill_value;
+                valid[out_idx + t] = 0;
+            }
+        }
+
+        free(file_ts_times);
+        free(file_ts_values);
+        free(file_ts_valid);
+        out_idx += file_times;
+    }
+
+    *times_out = times;
+    *values_out = values;
+    *valid_out = valid;
+    *n_out = total;
+    return 0;
+}
+
+void grib_close_fileset(USFileSet *fs) {
+    if (!fs) return;
+    for (int i = 0; i < fs->n_files; i++) {
+        if (fs->files[i]) grib_close(fs->files[i]);
+    }
+    free(fs->files);
+    free(fs->time_offsets);
+    free(fs->base_filename);
+    free(fs);
+}
+
 #endif /* HAVE_GRIB */
