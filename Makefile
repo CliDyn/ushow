@@ -125,12 +125,21 @@ ifneq ($(strip $(GRIB_PKG_CFLAGS)$(GRIB_PKG_LIBS)),)
   GRIB_CFLAGS := -DHAVE_GRIB $(GRIB_PKG_CFLAGS)
   GRIB_LIBS := $(GRIB_PKG_LIBS)
 else
-  GRIB_PREFIX ?= $(shell brew --prefix eccodes 2>/dev/null || echo "/usr/local")
-  GRIB_LIBDIR := $(GRIB_PREFIX)/lib
+  # DKRZ Levante spack path (eccodes uses lib64)
+  DKRZ_ECCODES := /sw/spack-levante/eccodes-2.44.0-hsksp4
+
+  ifneq ($(wildcard $(DKRZ_ECCODES)/include/eccodes.h),)
+    GRIB_PREFIX ?= $(DKRZ_ECCODES)
+    GRIB_LIBDIR := $(GRIB_PREFIX)/lib64
+    GRIB_RPATH := -Wl,-rpath,$(GRIB_LIBDIR)
+  else
+    GRIB_PREFIX ?= $(shell brew --prefix eccodes 2>/dev/null || echo "/usr/local")
+    GRIB_LIBDIR := $(GRIB_PREFIX)/lib
+    GRIB_RPATH :=
+  endif
+
   GRIB_CFLAGS := -DHAVE_GRIB -I$(GRIB_PREFIX)/include
-  GRIB_LIBS := -L$(GRIB_LIBDIR) -leccodes
-  GRIB_RPATH := -Wl,-rpath,$(GRIB_LIBDIR)
-  GRIB_LIBS += $(GRIB_RPATH)
+  GRIB_LIBS := -L$(GRIB_LIBDIR) -leccodes $(GRIB_RPATH)
 endif
 
 BASE_CFLAGS += $(GRIB_CFLAGS)
