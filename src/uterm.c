@@ -601,6 +601,37 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
     }
 #endif
 
+
+#ifdef HAVE_GRIB
+    if (use_glob) {
+        glob_t grib_test;
+        int is_grib_glob = 0;
+        if (glob(data_filenames[0], GLOB_TILDE | GLOB_NOSORT, NULL, &grib_test) == 0 &&
+            grib_test.gl_pathc > 0) {
+            is_grib_glob = grib_is_grib_file(grib_test.gl_pathv[0]);
+            globfree(&grib_test);
+        }
+        if (is_grib_glob) {
+            fileset = grib_open_glob(data_filenames[0]);
+            if (!fileset) {
+                fprintf(stderr, "Failed to open GRIB files matching: %s\n", data_filenames[0]);
+                return -1;
+            }
+            file = fileset->files[0];
+            return 0;
+        }
+    }
+    if (n_data_files > 1 && grib_is_grib_file(data_filenames[0])) {
+        fileset = grib_open_fileset(data_filenames, n_data_files);
+        if (!fileset) {
+            fprintf(stderr, "Failed to open GRIB files\n");
+            return -1;
+        }
+        file = fileset->files[0];
+        return 0;
+    }
+#endif
+
     if (use_glob) {
         fileset = netcdf_open_glob(data_filenames[0]);
         if (!fileset) {
@@ -664,7 +695,11 @@ static void cleanup_all(void) {
     } else
 #endif
 #ifdef HAVE_GRIB
-    if (file && file->file_type == FILE_TYPE_GRIB) {
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        grib_close_fileset(fileset);
+        fileset = NULL;
+        file = NULL;
+    } else if (file && file->file_type == FILE_TYPE_GRIB) {
         grib_close(file);
         file = NULL;
     } else
