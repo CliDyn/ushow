@@ -43,6 +43,27 @@ CFLAGS += $(ZARR_CFLAGS)
 LIBS += $(ZARR_LIBS)
 endif
 
+# GRIB support (optional) - build with: make WITH_GRIB=1
+ifdef WITH_GRIB
+GRIB_PKG_CFLAGS := $(shell pkg-config --cflags eccodes 2>/dev/null)
+GRIB_PKG_LIBS := $(shell pkg-config --libs eccodes 2>/dev/null)
+
+ifneq ($(strip $(GRIB_PKG_CFLAGS)$(GRIB_PKG_LIBS)),)
+  GRIB_CFLAGS := -DHAVE_GRIB $(GRIB_PKG_CFLAGS)
+  GRIB_LIBS := $(GRIB_PKG_LIBS)
+else
+  GRIB_PREFIX := $(shell brew --prefix eccodes 2>/dev/null || echo "/usr/local")
+  GRIB_LIBDIR := $(GRIB_PREFIX)/lib
+  GRIB_CFLAGS := -DHAVE_GRIB -I$(GRIB_PREFIX)/include
+  GRIB_LIBS := -L$(GRIB_LIBDIR) -leccodes
+  GRIB_RPATH := -Wl,-rpath,$(GRIB_LIBDIR)
+  GRIB_LIBS += $(GRIB_RPATH)
+endif
+
+CFLAGS += $(GRIB_CFLAGS)
+LIBS += $(GRIB_LIBS)
+endif
+
 # Source directory
 SRCDIR = ../src
 
@@ -54,12 +75,18 @@ ifdef WITH_ZARR
 TEST_TARGETS += test_file_zarr
 endif
 
+# Add grib test if enabled
+ifdef WITH_GRIB
+TEST_TARGETS += test_file_grib
+endif
+
 # Object files needed from main project
 KDTREE_OBJ = $(SRCDIR)/kdtree.c
 MESH_OBJ = $(SRCDIR)/mesh.c
 REGRID_OBJ = $(SRCDIR)/regrid.c
 COLORMAPS_OBJ = $(SRCDIR)/colormaps.c
 FILE_NETCDF_OBJ = $(SRCDIR)/file_netcdf.c
+FILE_GRIB_OBJ = $(SRCDIR)/file_grib.c
 
 # Zarr support files (only when WITH_ZARR=1)
 FILE_ZARR_OBJ = $(SRCDIR)/file_zarr.c
@@ -108,6 +135,10 @@ test_timeseries: test_timeseries.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 
 # Zarr test (only built with WITH_ZARR=1)
 test_file_zarr: test_file_zarr.c $(FILE_ZARR_OBJ) $(CJSON_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+# GRIB test (only built with WITH_GRIB=1)
+test_file_grib: test_file_grib.c $(FILE_GRIB_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Run all tests
@@ -166,9 +197,12 @@ test-timeseries: test_timeseries
 test-zarr: test_file_zarr
 	./test_file_zarr
 
+test-grib: test_file_grib
+	./test_file_grib
+
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_file_zarr
+	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 
@@ -197,6 +231,7 @@ help:
 	@echo "  test-colormaps - Run Colormap tests only"
 	@echo "  test-netcdf  - Run NetCDF tests only"
 	@echo "  test-zarr    - Run Zarr tests only (requires WITH_ZARR=1)"
+	@echo "  test-grib    - Run GRIB tests only (requires WITH_GRIB=1)"
 	@echo "  test-integration - Run Integration tests only"
 	@echo "  test-term-render-mode - Run terminal render mode tests only"
 	@echo "  test-range-popup - Run range popup logic tests only"

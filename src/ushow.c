@@ -11,6 +11,9 @@
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
+#ifdef HAVE_GRIB
+#include "file_grib.h"
+#endif
 #include "colormaps.h"
 #include "view.h"
 #include "interface/x_interface.h"
@@ -62,6 +65,7 @@ static void on_var_select(int var_index) {
     }
     if (!var) return;
 
+    USVar *prev_var = current_var;
     current_var = var;
     view_set_variable(view, var, mesh, regrid);
 
@@ -73,7 +77,14 @@ static void on_var_select(int var_index) {
 
     /* Set up dimension info panel */
     if (current_dim_info) {
-        netcdf_free_dim_info(current_dim_info, n_current_dims);
+#ifdef HAVE_GRIB
+        if (prev_var && prev_var->file && prev_var->file->file_type == FILE_TYPE_GRIB) {
+            grib_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+        {
+            netcdf_free_dim_info(current_dim_info, n_current_dims);
+        }
     }
     /* Use fileset dimension info if available (includes virtual time) */
 #ifdef HAVE_ZARR
@@ -81,6 +92,13 @@ static void on_var_select(int var_index) {
         current_dim_info = zarr_get_dim_info_fileset(zarr_fileset, var, &n_current_dims);
     } else if (var->file && var->file->file_type == FILE_TYPE_ZARR) {
         current_dim_info = zarr_get_dim_info(var, &n_current_dims);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        current_dim_info = grib_get_dim_info_fileset(fileset, var, &n_current_dims);
+    } else if (var->file && var->file->file_type == FILE_TYPE_GRIB) {
+        current_dim_info = grib_get_dim_info(var, &n_current_dims);
     } else
 #endif
     if (fileset) {
@@ -283,6 +301,15 @@ static void on_mouse_click(int px, int py) {
                                           view->depth_index, &times, &values, &valid, &n_out);
     } else if (current_var->file && current_var->file->file_type == FILE_TYPE_ZARR) {
         rc = zarr_read_timeseries(current_var, node_idx, view->depth_index,
+                                  &times, &values, &valid, &n_out);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        rc = grib_read_timeseries_fileset(fileset, current_var, node_idx,
+                                          view->depth_index, &times, &values, &valid, &n_out);
+    } else if (current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
+        rc = grib_read_timeseries(current_var, node_idx, view->depth_index,
                                   &times, &values, &valid, &n_out);
     } else
 #endif
@@ -725,7 +752,7 @@ static void update_display(void) {
 }
 
 static void print_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [options] <data_file.nc> [file2.nc ...]\n\n", prog);
+    fprintf(stderr, "Usage: %s [options] <data_file.nc|data.grib|data.zarr> [file2 ...]\n\n", prog);
     fprintf(stderr, "Multi-file: Files are concatenated along time dimension.\n");
     fprintf(stderr, "Glob patterns are supported (quote them to prevent shell expansion).\n\n");
     fprintf(stderr, "Options:\n");
@@ -832,74 +859,151 @@ int main(int argc, char *argv[]) {
     /* Open data file(s) */
     printf("Opening data file(s)...\n");
 
+    if (!use_glob && n_data_files == 1) {
 #ifdef HAVE_ZARR
-    /* Check if first file is a zarr store */
-    if (n_data_files == 1 && !use_glob && zarr_is_zarr_store(data_filenames[0])) {
-        printf("Detected zarr store: %s\n", data_filenames[0]);
-        file = zarr_open(data_filenames[0]);
-        if (!file) {
-            fprintf(stderr, "Failed to open zarr store: %s\n", data_filenames[0]);
-            return 1;
+        /* Check if first file is a zarr store */
+        if (zarr_is_zarr_store(data_filenames[0])) {
+            printf("Detected zarr store: %s\n", data_filenames[0]);
+            file = zarr_open(data_filenames[0]);
+            if (!file) {
+                fprintf(stderr, "Failed to open zarr store: %s\n", data_filenames[0]);
+                return 1;
+            }
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (grib_is_grib_file(data_filenames[0])) {
+            printf("Detected GRIB file: %s\n", data_filenames[0]);
+            file = grib_open(data_filenames[0]);
+            if (!file) {
+                fprintf(stderr, "Failed to open GRIB file: %s\n", data_filenames[0]);
+                return 1;
+            }
+        } else
+#endif
+        {
+            file = netcdf_open(data_filenames[0]);
+            if (!file) {
+                fprintf(stderr, "Failed to open data file: %s\n", data_filenames[0]);
+                return 1;
+            }
         }
-    } else if (use_glob) {
-        /* Check if glob pattern matches zarr stores by expanding and testing first match */
-        glob_t test_glob;
-        int is_zarr_glob = 0;
-        if (glob(data_filenames[0], GLOB_TILDE | GLOB_NOSORT, NULL, &test_glob) == 0 &&
-            test_glob.gl_pathc > 0) {
-            is_zarr_glob = zarr_is_zarr_store(test_glob.gl_pathv[0]);
-            globfree(&test_glob);
-        }
+    } else {
+#ifdef HAVE_ZARR
+        if (use_glob) {
+            /* Check if glob pattern matches zarr/grib stores by expanding and testing first match */
+            glob_t test_glob;
+            int is_zarr_glob = 0;
+#ifdef HAVE_GRIB
+            int is_grib_glob = 0;
+#endif
+            if (glob(data_filenames[0], GLOB_TILDE | GLOB_NOSORT, NULL, &test_glob) == 0 &&
+                test_glob.gl_pathc > 0) {
+                is_zarr_glob = zarr_is_zarr_store(test_glob.gl_pathv[0]);
+#ifdef HAVE_GRIB
+                if (!is_zarr_glob)
+                    is_grib_glob = grib_is_grib_file(test_glob.gl_pathv[0]);
+#endif
+                globfree(&test_glob);
+            }
 
-        if (is_zarr_glob) {
-            zarr_fileset = zarr_open_glob(data_filenames[0]);
+            if (is_zarr_glob) {
+                zarr_fileset = zarr_open_glob(data_filenames[0]);
+                if (!zarr_fileset) {
+                    fprintf(stderr, "Failed to open zarr stores matching: %s\n", data_filenames[0]);
+                    return 1;
+                }
+                file = zarr_fileset->files[0];
+            }
+#ifdef HAVE_GRIB
+            else if (is_grib_glob) {
+                fileset = grib_open_glob(data_filenames[0]);
+                if (!fileset) {
+                    fprintf(stderr, "Failed to open GRIB files matching: %s\n", data_filenames[0]);
+                    return 1;
+                }
+                file = fileset->files[0];
+            }
+#endif
+            else {
+                fileset = netcdf_open_glob(data_filenames[0]);
+                if (!fileset) {
+                    fprintf(stderr, "Failed to open files matching: %s\n", data_filenames[0]);
+                    return 1;
+                }
+                file = fileset->files[0];
+            }
+        } else if (n_data_files > 1 && zarr_is_zarr_store(data_filenames[0])) {
+            /* Multiple explicit zarr files */
+            zarr_fileset = zarr_open_fileset(data_filenames, n_data_files);
             if (!zarr_fileset) {
-                fprintf(stderr, "Failed to open zarr stores matching: %s\n", data_filenames[0]);
+                fprintf(stderr, "Failed to open zarr stores\n");
                 return 1;
             }
             file = zarr_fileset->files[0];
-        } else {
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (n_data_files > 1 && grib_is_grib_file(data_filenames[0])) {
+            /* Multiple explicit GRIB files */
+            fileset = grib_open_fileset(data_filenames, n_data_files);
+            if (!fileset) {
+                fprintf(stderr, "Failed to open GRIB files\n");
+                return 1;
+            }
+            file = fileset->files[0];
+        } else
+#endif
+        if (use_glob) {
+            /* Use glob pattern */
+#ifdef HAVE_GRIB
+            {
+                glob_t grib_test;
+                int is_grib_glob = 0;
+                if (glob(data_filenames[0], GLOB_TILDE | GLOB_NOSORT, NULL, &grib_test) == 0 &&
+                    grib_test.gl_pathc > 0) {
+                    is_grib_glob = grib_is_grib_file(grib_test.gl_pathv[0]);
+                    globfree(&grib_test);
+                }
+                if (is_grib_glob) {
+                    fileset = grib_open_glob(data_filenames[0]);
+                    if (!fileset) {
+                        fprintf(stderr, "Failed to open GRIB files matching: %s\n", data_filenames[0]);
+                        return 1;
+                    }
+                    file = fileset->files[0];
+                } else {
+                    fileset = netcdf_open_glob(data_filenames[0]);
+                    if (!fileset) {
+                        fprintf(stderr, "Failed to open files matching: %s\n", data_filenames[0]);
+                        return 1;
+                    }
+                    file = fileset->files[0];
+                }
+            }
+#else
             fileset = netcdf_open_glob(data_filenames[0]);
             if (!fileset) {
                 fprintf(stderr, "Failed to open files matching: %s\n", data_filenames[0]);
                 return 1;
             }
-            file = fileset->files[0];
-        }
-    } else if (n_data_files > 1 && zarr_is_zarr_store(data_filenames[0])) {
-        /* Multiple explicit zarr files */
-        zarr_fileset = zarr_open_fileset(data_filenames, n_data_files);
-        if (!zarr_fileset) {
-            fprintf(stderr, "Failed to open zarr stores\n");
-            return 1;
-        }
-        file = zarr_fileset->files[0];
-    } else
-#else
-    if (use_glob) {
-        /* Use glob pattern */
-        fileset = netcdf_open_glob(data_filenames[0]);
-        if (!fileset) {
-            fprintf(stderr, "Failed to open files matching: %s\n", data_filenames[0]);
-            return 1;
-        }
-        file = fileset->files[0];  /* Primary file for variable scanning */
-    } else
+            file = fileset->files[0];  /* Primary file for variable scanning */
 #endif
-    if (n_data_files > 1) {
-        /* Multiple explicit files */
-        fileset = netcdf_open_fileset(data_filenames, n_data_files);
-        if (!fileset) {
-            fprintf(stderr, "Failed to open data files\n");
-            return 1;
-        }
-        file = fileset->files[0];  /* Primary file for variable scanning */
-    } else {
-        /* Single file */
-        file = netcdf_open(data_filenames[0]);
-        if (!file) {
-            fprintf(stderr, "Failed to open data file: %s\n", data_filenames[0]);
-            return 1;
+        } else if (n_data_files > 1) {
+            /* Multiple explicit files */
+            fileset = netcdf_open_fileset(data_filenames, n_data_files);
+            if (!fileset) {
+                fprintf(stderr, "Failed to open data files\n");
+                return 1;
+            }
+            file = fileset->files[0];  /* Primary file for variable scanning */
+        } else {
+            /* Single file fallback */
+            file = netcdf_open(data_filenames[0]);
+            if (!file) {
+                fprintf(stderr, "Failed to open data file: %s\n", data_filenames[0]);
+                return 1;
+            }
         }
     }
 
@@ -912,6 +1016,17 @@ int main(int argc, char *argv[]) {
         if (!mesh) {
             fprintf(stderr, "Failed to load mesh from zarr store\n");
             zarr_close(file);
+            return 1;
+        }
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (file->file_type == FILE_TYPE_GRIB) {
+        mesh = grib_create_mesh(file);
+        if (!mesh) {
+            fprintf(stderr, "Failed to load mesh from GRIB file\n");
+            if (fileset) grib_close_fileset(fileset);
+            else grib_close(file);
             return 1;
         }
     } else
@@ -954,6 +1069,11 @@ int main(int argc, char *argv[]) {
         variables = zarr_scan_variables(file, mesh);
     } else
 #endif
+#ifdef HAVE_GRIB
+    if (file->file_type == FILE_TYPE_GRIB) {
+        variables = grib_scan_variables(file, mesh);
+    } else
+#endif
     {
         variables = netcdf_scan_variables(file, mesh);
     }
@@ -962,8 +1082,16 @@ int main(int argc, char *argv[]) {
         regrid_free(regrid);
         mesh_free(mesh);
 #ifdef HAVE_ZARR
-        if (file->file_type == FILE_TYPE_ZARR) zarr_close(file);
-        else
+        if (file->file_type == FILE_TYPE_ZARR) {
+            zarr_close(file);
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            grib_close_fileset(fileset);
+        } else if (file->file_type == FILE_TYPE_GRIB) {
+            grib_close(file);
+        } else
 #endif
         if (fileset) netcdf_close_fileset(fileset);
         else netcdf_close(file);
@@ -1006,6 +1134,13 @@ int main(int argc, char *argv[]) {
             init_dims = zarr_get_dim_info_fileset(zarr_fileset, max_var, &n_init_dims);
         } else if (file->file_type == FILE_TYPE_ZARR) {
             init_dims = zarr_get_dim_info(max_var, &n_init_dims);
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            init_dims = grib_get_dim_info_fileset(fileset, max_var, &n_init_dims);
+        } else if (file->file_type == FILE_TYPE_GRIB) {
+            init_dims = grib_get_dim_info(max_var, &n_init_dims);
         } else
 #endif
         if (fileset) {
@@ -1053,16 +1188,41 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to initialize X11 display\n");
         free(var_names);
         if (init_dims) {
-            netcdf_free_dim_info(init_dims, n_init_dims);
+#ifdef HAVE_GRIB
+            if (file->file_type == FILE_TYPE_GRIB) {
+                grib_free_dim_info(init_dims, n_init_dims);
+            } else
+#endif
+            {
+                netcdf_free_dim_info(init_dims, n_init_dims);
+            }
         }
         regrid_free(regrid);
         mesh_free(mesh);
-        netcdf_close(file);
+#ifdef HAVE_GRIB
+        if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            grib_close_fileset(fileset);
+        } else if (file->file_type == FILE_TYPE_GRIB) {
+            grib_close(file);
+        } else
+#endif
+        if (fileset) {
+            netcdf_close_fileset(fileset);
+        } else {
+            netcdf_close(file);
+        }
         return 1;
     }
     free(var_names);
     if (init_dims) {
-        netcdf_free_dim_info(init_dims, n_init_dims);
+#ifdef HAVE_GRIB
+        if (file->file_type == FILE_TYPE_GRIB) {
+            grib_free_dim_info(init_dims, n_init_dims);
+        } else
+#endif
+        {
+            netcdf_free_dim_info(init_dims, n_init_dims);
+        }
     }
 
     /* Set up callbacks */
@@ -1119,7 +1279,14 @@ int main(int argc, char *argv[]) {
     /* Cleanup */
     x_cleanup();
     if (current_dim_info) {
-        netcdf_free_dim_info(current_dim_info, n_current_dims);
+#ifdef HAVE_GRIB
+        if (current_var && current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
+            grib_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+        {
+            netcdf_free_dim_info(current_dim_info, n_current_dims);
+        }
     }
     view_free(view);
     regrid_free(regrid);
@@ -1129,6 +1296,13 @@ int main(int argc, char *argv[]) {
         zarr_close_fileset(zarr_fileset);
     } else if (file && file->file_type == FILE_TYPE_ZARR) {
         zarr_close(file);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        grib_close_fileset(fileset);
+    } else if (file && file->file_type == FILE_TYPE_GRIB) {
+        grib_close(file);
     } else
 #endif
     if (fileset) {

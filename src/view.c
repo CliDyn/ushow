@@ -7,6 +7,9 @@
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
+#ifdef HAVE_GRIB
+#include "file_grib.h"
+#endif
 #include "regrid.h"
 #include "colormaps.h"
 #include <stdlib.h>
@@ -99,6 +102,11 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 #ifdef HAVE_ZARR
         if (var->file && var->file->file_type == FILE_TYPE_ZARR) {
             zarr_estimate_range(var, &var->global_min, &var->global_max);
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (var->file && var->file->file_type == FILE_TYPE_GRIB) {
+            grib_estimate_range(var, &var->global_min, &var->global_max);
         } else
 #endif
         {
@@ -391,6 +399,16 @@ int view_update(USView *view) {
     } else if (view->variable->file && view->variable->file->file_type == FILE_TYPE_ZARR) {
         /* Single zarr file */
         read_result = zarr_read_slice(view->variable, view->time_index,
+                                      view->depth_index, view->raw_data);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (view->fileset && view->fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        read_result = grib_read_slice_fileset(view->fileset, view->variable,
+                                              view->time_index, view->depth_index,
+                                              view->raw_data);
+    } else if (view->variable->file && view->variable->file->file_type == FILE_TYPE_GRIB) {
+        read_result = grib_read_slice(view->variable, view->time_index,
                                       view->depth_index, view->raw_data);
     } else
 #endif

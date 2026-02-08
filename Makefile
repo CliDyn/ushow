@@ -115,6 +115,39 @@ USHOW_LIBS += $(ZARR_LIBS)
 UTERM_LIBS += $(ZARR_LIBS)
 endif
 
+# GRIB support (optional) - build with: make WITH_GRIB=1
+# Requires: eccodes (brew install eccodes on macOS)
+ifdef WITH_GRIB
+GRIB_PKG_CFLAGS := $(shell pkg-config --cflags eccodes 2>/dev/null)
+GRIB_PKG_LIBS := $(shell pkg-config --libs eccodes 2>/dev/null)
+
+ifneq ($(strip $(GRIB_PKG_CFLAGS)$(GRIB_PKG_LIBS)),)
+  GRIB_CFLAGS := -DHAVE_GRIB $(GRIB_PKG_CFLAGS)
+  GRIB_LIBS := $(GRIB_PKG_LIBS)
+else
+  # DKRZ Levante spack path (eccodes uses lib64)
+  DKRZ_ECCODES := /sw/spack-levante/eccodes-2.44.0-hsksp4
+
+  ifneq ($(wildcard $(DKRZ_ECCODES)/include/eccodes.h),)
+    GRIB_PREFIX ?= $(DKRZ_ECCODES)
+    GRIB_LIBDIR := $(GRIB_PREFIX)/lib64
+    GRIB_RPATH := -Wl,-rpath,$(GRIB_LIBDIR)
+  else
+    GRIB_PREFIX ?= $(shell brew --prefix eccodes 2>/dev/null || echo "/usr/local")
+    GRIB_LIBDIR := $(GRIB_PREFIX)/lib
+    GRIB_RPATH :=
+  endif
+
+  GRIB_CFLAGS := -DHAVE_GRIB -I$(GRIB_PREFIX)/include
+  GRIB_LIBS := -L$(GRIB_LIBDIR) -leccodes $(GRIB_RPATH)
+endif
+
+BASE_CFLAGS += $(GRIB_CFLAGS)
+X11_FULL_CFLAGS += $(GRIB_CFLAGS)
+USHOW_LIBS += $(GRIB_LIBS)
+UTERM_LIBS += $(GRIB_LIBS)
+endif
+
 # Directories
 SRCDIR = src
 OBJDIR = obj
@@ -144,6 +177,11 @@ ifdef WITH_ZARR
 COMMON_SRCS += $(SRCDIR)/file_zarr.c
 USHOW_SRCS += $(SRCDIR)/cJSON/cJSON.c
 UTERM_SRCS += $(SRCDIR)/cJSON/cJSON.c
+endif
+
+# Add grib sources if enabled
+ifdef WITH_GRIB
+COMMON_SRCS += $(SRCDIR)/file_grib.c
 endif
 
 USHOW_OBJS = $(USHOW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
@@ -229,6 +267,11 @@ ifdef WITH_ZARR
 $(OBJDIR)/file_zarr.o: $(SRCDIR)/file_zarr.c $(SRCDIR)/file_zarr.h $(SRCDIR)/ushow.defines.h \
                         $(SRCDIR)/cJSON/cJSON.h
 $(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c $(SRCDIR)/cJSON/cJSON.h
+endif
+
+# GRIB dependencies (when WITH_GRIB is set)
+ifdef WITH_GRIB
+$(OBJDIR)/file_grib.o: $(SRCDIR)/file_grib.c $(SRCDIR)/file_grib.h $(SRCDIR)/ushow.defines.h
 endif
 
 # Print configuration
