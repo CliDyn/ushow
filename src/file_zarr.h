@@ -109,5 +109,10 @@ int zarr_read_timeseries_fileset(USFileSet *fs, USVar *var,
                                  double **times_out, float **values_out,
                                  int **valid_out, size_t *n_out);
 
+/*
+ * Get total time steps across all files.
+ */
+size_t zarr_fileset_total_times(USFileSet *fs);
+
 #endif /* HAVE_ZARR */
 #endif /* FILE_ZARR_H */

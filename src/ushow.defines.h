@@ -188,6 +188,10 @@ struct USFileSet {
     size_t     *time_offsets;       /* Cumulative time offsets [n_files+1] */
     size_t      total_times;        /* Total virtual time steps */
     char       *base_filename;      /* First filename (for display) */
+#ifdef HAVE_GRIB
+    double     *grib_times;         /* Unique GRIB time values (days since epoch) */
+    size_t      grib_n_times;       /* Number of unique GRIB time values */
+#endif
 };
 
 /* Render mode */

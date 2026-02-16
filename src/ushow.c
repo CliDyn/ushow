@@ -1071,7 +1071,11 @@ int main(int argc, char *argv[]) {
 #endif
 #ifdef HAVE_GRIB
     if (file->file_type == FILE_TYPE_GRIB) {
-        variables = grib_scan_variables(file, mesh);
+        if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            variables = grib_scan_variables_fileset(fileset, mesh);
+        } else {
+            variables = grib_scan_variables(file, mesh);
+        }
     } else
 #endif
     {
@@ -1291,6 +1295,17 @@ int main(int argc, char *argv[]) {
     view_free(view);
     regrid_free(regrid);
     mesh_free(mesh);
+#ifdef HAVE_GRIB
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        USVar *var = variables;
+        while (var) {
+            USVar *next = var->next;
+            free(var);
+            var = next;
+        }
+        variables = NULL;
+    }
+#endif
 #ifdef HAVE_ZARR
     if (zarr_fileset) {
         zarr_close_fileset(zarr_fileset);

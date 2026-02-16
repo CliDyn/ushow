@@ -37,6 +37,12 @@ USMesh *grib_create_mesh(USFile *file);
 USVar *grib_scan_variables(USFile *file, USMesh *mesh);
 
 /*
+ * Scan all GRIB files in a fileset and return union of variables.
+ * Returns linked list of variables (caller owns list).
+ */
+USVar *grib_scan_variables_fileset(USFileSet *fs, USMesh *mesh);
+
+/*
  * Read a 2D slice of data from a GRIB variable.
  * var: variable to read
  * time_idx: time index (ignored if no time dimension)
