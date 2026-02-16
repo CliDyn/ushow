@@ -45,7 +45,19 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 
     /* Get dimension info - use fileset total if available */
     if (view->fileset) {
-        view->n_times = netcdf_fileset_total_times(view->fileset);
+#ifdef HAVE_ZARR
+        if (view->fileset->files[0]->file_type == FILE_TYPE_ZARR) {
+            view->n_times = zarr_fileset_total_times(view->fileset);
+        } else
+#endif
+#ifdef HAVE_GRIB
+        if (view->fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            view->n_times = grib_fileset_total_times(view->fileset);
+        } else
+#endif
+        {
+            view->n_times = netcdf_fileset_total_times(view->fileset);
+        }
     } else {
         view->n_times = (var->time_dim_id >= 0) ? var->dim_sizes[var->time_dim_id] : 1;
     }

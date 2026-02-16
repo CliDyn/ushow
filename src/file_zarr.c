@@ -1217,6 +1217,10 @@ static int zarr_fileset_map_time(USFileSet *fs, size_t virtual_time,
     return 0;
 }
 
+size_t zarr_fileset_total_times(USFileSet *fs) {
+    return fs ? fs->total_times : 0;
+}
+
 int zarr_read_slice_fileset(USFileSet *fs, USVar *var,
                             size_t virtual_time, size_t depth_idx, float *data) {
     if (!fs || !var || !data) return -1;

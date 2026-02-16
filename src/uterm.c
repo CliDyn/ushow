@@ -673,6 +673,13 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
 }
 
 static void cleanup_all(void) {
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        for (int i = 0; i < n_variables; i++) {
+            if (var_array && var_array[i]) {
+                free(var_array[i]);
+            }
+        }
+    }
     free(var_array);
     var_array = NULL;
 
@@ -836,7 +843,11 @@ int main(int argc, char *argv[]) {
 #endif
 #ifdef HAVE_GRIB
     if (file->file_type == FILE_TYPE_GRIB) {
-        variables = grib_scan_variables(file, mesh);
+        if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+            variables = grib_scan_variables_fileset(fileset, mesh);
+        } else {
+            variables = grib_scan_variables(file, mesh);
+        }
     } else
 #endif
     {

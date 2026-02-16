@@ -70,6 +70,8 @@ typedef struct {
     off_t offset;
 } GribLevelMessage;
 
+static codes_handle *grib_handle_from_offset(GribFileData *gfile, off_t offset);
+
 static int grib_util_get_string(codes_handle *h, const char *key, char *buf, size_t bufsize) {
     if (!buf || bufsize == 0) return 0;
     buf[0] = '\0';
@@ -132,6 +134,73 @@ static int compare_level_message(const void *a, const void *b) {
     if (ma->offset < mb->offset) return -1;
     if (ma->offset > mb->offset) return 1;
     return 0;
+}
+
+static int grib_time_list_contains(const double *times, size_t n_times, double value) {
+    for (size_t i = 0; i < n_times; i++) {
+        if (times[i] == value) return 1;
+    }
+    return 0;
+}
+
+static void grib_fileset_collect_times(USFileSet *fs) {
+    if (!fs || fs->n_files <= 0) return;
+
+    double *times = NULL;
+    size_t n_times = 0;
+    size_t cap = 0;
+
+    for (int f = 0; f < fs->n_files; f++) {
+        USFile *file = fs->files[f];
+        if (!file || !file->grib_data) continue;
+        GribFileData *gfile = (GribFileData *)file->grib_data;
+        for (int i = 0; i < gfile->n_messages; i++) {
+            codes_handle *h = grib_handle_from_offset(gfile, gfile->offsets[i]);
+            if (!h) continue;
+            double time_val = 0.0;
+            if (grib_get_time_value(h, &time_val)) {
+                if (!grib_time_list_contains(times, n_times, time_val)) {
+                    if (n_times == cap) {
+                        size_t new_cap = cap == 0 ? 16 : cap * 2;
+                        double *new_times = realloc(times, new_cap * sizeof(double));
+                        if (!new_times) {
+                            codes_handle_delete(h);
+                            free(times);
+                            return;
+                        }
+                        times = new_times;
+                        cap = new_cap;
+                    }
+                    times[n_times++] = time_val;
+                }
+            }
+            codes_handle_delete(h);
+        }
+    }
+
+    if (n_times == 0) {
+        free(times);
+        return;
+    }
+
+    qsort(times, n_times, sizeof(double), compare_double);
+    fs->grib_times = times;
+    fs->grib_n_times = n_times;
+}
+
+static int grib_var_list_contains(USVar *list, const char *name) {
+    for (USVar *v = list; v; v = v->next) {
+        if (strcmp(v->name, name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void grib_free_var_list_shallow(USVar *list) {
+    while (list) {
+        USVar *next = list->next;
+        free(list);
+        list = next;
+    }
 }
 
 static int is_grib_message(FILE *fp) {
@@ -743,6 +812,47 @@ USVar *grib_scan_variables(USFile *file, USMesh *mesh) {
     return var_list;
 }
 
+USVar *grib_scan_variables_fileset(USFileSet *fs, USMesh *mesh) {
+    if (!fs || !mesh || fs->n_files <= 0) return NULL;
+
+    USVar *var_list = NULL;
+    USVar *var_tail = NULL;
+    int var_count = 0;
+
+    for (int f = 0; f < fs->n_files; f++) {
+        USFile *file = fs->files[f];
+        if (!file) continue;
+        if (!file->vars) {
+            grib_scan_variables(file, mesh);
+        }
+
+        for (USVar *v = file->vars; v; v = v->next) {
+            if (grib_var_list_contains(var_list, v->name)) continue;
+
+            USVar *copy = calloc(1, sizeof(USVar));
+            if (!copy) {
+                grib_free_var_list_shallow(var_list);
+                return NULL;
+            }
+            memcpy(copy, v, sizeof(USVar));
+            copy->next = NULL;
+
+            if (!var_list) var_list = copy;
+            else var_tail->next = copy;
+            var_tail = copy;
+            var_count++;
+        }
+    }
+
+    if (var_count == 0) {
+        grib_free_var_list_shallow(var_list);
+        return NULL;
+    }
+
+    printf("Found %d GRIB variables across %d files\n", var_count, fs->n_files);
+    return var_list;
+}
+
 static int grib_select_offset(const GribVarData *data, size_t time_idx, size_t depth_idx, off_t *offset_out) {
     if (!data || !offset_out) return -1;
     if (data->n_levels == 0 || data->n_times == 0) return -1;
@@ -1111,8 +1221,13 @@ USFileSet *grib_open_fileset(const char **filenames, int n_files) {
     fs->total_times = fs->time_offsets[n_files];
     fs->base_filename = strdup(sorted[0]);
 
+    grib_fileset_collect_times(fs);
+
     printf("Total virtual time steps: %zu across %d GRIB files\n",
            fs->total_times, n_files);
+    if (fs->grib_times && fs->grib_n_times > 0) {
+        printf("GRIB unique time steps: %zu\n", fs->grib_n_times);
+    }
 
     for (int i = 0; i < n_files; i++) free(sorted[i]);
     free(sorted);
@@ -1166,22 +1281,57 @@ int grib_fileset_map_time(USFileSet *fs, size_t virtual_time,
 }
 
 size_t grib_fileset_total_times(USFileSet *fs) {
-    return fs ? fs->total_times : 0;
+    if (!fs) return 0;
+    if (fs->grib_times && fs->grib_n_times > 0) {
+        return fs->grib_n_times;
+    }
+    return fs->total_times;
 }
 
 int grib_read_slice_fileset(USFileSet *fs, USVar *var,
                             size_t virtual_time, size_t depth_idx, float *data) {
     if (!fs || !var || !data) return -1;
 
-    int file_idx;
-    size_t local_time;
-    if (grib_fileset_map_time(fs, virtual_time, &file_idx, &local_time) != 0) {
-        fprintf(stderr, "Invalid virtual time index: %zu\n", virtual_time);
-        return -1;
+    size_t mapped_time = virtual_time;
+    if (fs->grib_times && fs->grib_n_times > 0) {
+        if (virtual_time >= fs->grib_n_times) {
+            fprintf(stderr, "Invalid GRIB virtual time index: %zu\n", virtual_time);
+            return -1;
+        }
+
+        mapped_time = fs->total_times;
+        for (size_t t = 0; t < fs->total_times; t++) {
+            int file_idx = 0;
+            size_t local_time = 0;
+            if (grib_fileset_map_time(fs, t, &file_idx, &local_time) != 0) continue;
+            USFile *file = fs->files[file_idx];
+            if (!file || !file->vars) {
+                if (file && var->mesh) grib_scan_variables(file, var->mesh);
+            }
+            USVar *file_var = file ? grib_find_var(file, var->name) : NULL;
+            if (!file_var || !file_var->grib_data) continue;
+            GribVarData *fdata = (GribVarData *)file_var->grib_data;
+            if (local_time < fdata->n_times &&
+                fdata->times[local_time] == fs->grib_times[virtual_time]) {
+                mapped_time = t;
+                break;
+            }
+        }
+
+        if (mapped_time == fs->total_times) {
+            size_t n_points = var->mesh ? var->mesh->n_points : 0;
+            for (size_t i = 0; i < n_points; i++) {
+                data[i] = var->fill_value;
+            }
+            return 0;
+        }
     }
 
-    if (file_idx == 0) {
-        return grib_read_slice(var, local_time, depth_idx, data);
+    int file_idx;
+    size_t local_time;
+    if (grib_fileset_map_time(fs, mapped_time, &file_idx, &local_time) != 0) {
+        fprintf(stderr, "Invalid virtual time index: %zu\n", mapped_time);
+        return -1;
     }
 
     USFile *file = fs->files[file_idx];
@@ -1194,9 +1344,11 @@ int grib_read_slice_fileset(USFileSet *fs, USVar *var,
     /* Find matching variable by name */
     USVar *file_var = grib_find_var(file, var->name);
     if (!file_var) {
-        fprintf(stderr, "Variable '%s' not found in GRIB file %d\n",
-                var->name, file_idx);
-        return -1;
+        size_t n_points = var->mesh ? var->mesh->n_points : 0;
+        for (size_t i = 0; i < n_points; i++) {
+            data[i] = var->fill_value;
+        }
+        return 0;
     }
 
     return grib_read_slice(file_var, local_time, depth_idx, data);
@@ -1204,6 +1356,55 @@ int grib_read_slice_fileset(USFileSet *fs, USVar *var,
 
 USDimInfo *grib_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out) {
     if (!fs || !var || !n_dims_out || fs->n_files == 0) return NULL;
+
+    if (fs->grib_times && fs->grib_n_times > 0 && var->time_dim_id >= 0) {
+        int n_scannable = 0;
+        if (var->time_dim_id >= 0) n_scannable++;
+        if (var->depth_dim_id >= 0) n_scannable++;
+        if (n_scannable == 0) {
+            *n_dims_out = 0;
+            return NULL;
+        }
+
+        USDimInfo *dims = calloc(n_scannable, sizeof(USDimInfo));
+        if (!dims) {
+            *n_dims_out = 0;
+            return NULL;
+        }
+
+        int idx = 0;
+        USDimInfo *time_dim = &dims[idx++];
+        strncpy(time_dim->name, GRIB_TIME_DIM_NAME, MAX_NAME_LEN - 1);
+        strncpy(time_dim->units, "days since 1970-01-01", MAX_NAME_LEN - 1);
+        time_dim->size = fs->grib_n_times;
+        time_dim->current = 0;
+        time_dim->values = malloc(fs->grib_n_times * sizeof(double));
+        if (time_dim->values) {
+            memcpy(time_dim->values, fs->grib_times, fs->grib_n_times * sizeof(double));
+            time_dim->min_val = time_dim->values[0];
+            time_dim->max_val = time_dim->values[fs->grib_n_times - 1];
+        }
+        time_dim->is_scannable = (time_dim->size > 1);
+
+        if (var->depth_dim_id >= 0) {
+            GribVarData *data = (GribVarData *)var->grib_data;
+            USDimInfo *depth_dim = &dims[idx++];
+            strncpy(depth_dim->name, GRIB_DEPTH_DIM_NAME, MAX_NAME_LEN - 1);
+            strncpy(depth_dim->units, data->type_of_level, MAX_NAME_LEN - 1);
+            depth_dim->size = data->n_levels;
+            depth_dim->current = 0;
+            depth_dim->values = malloc(data->n_levels * sizeof(double));
+            if (depth_dim->values) {
+                memcpy(depth_dim->values, data->levels, data->n_levels * sizeof(double));
+                depth_dim->min_val = depth_dim->values[0];
+                depth_dim->max_val = depth_dim->values[data->n_levels - 1];
+            }
+            depth_dim->is_scannable = (depth_dim->size > 1);
+        }
+
+        *n_dims_out = n_scannable;
+        return dims;
+    }
 
     /* Get base dim info from the variable (file 0) */
     USDimInfo *dims = grib_get_dim_info(var, n_dims_out);
@@ -1231,7 +1432,7 @@ USDimInfo *grib_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out)
                         grib_scan_variables(file, var->mesh);
                     }
 
-                    USVar *file_var = (f == 0) ? var : grib_find_var(file, var->name);
+                    USVar *file_var = grib_find_var(file, var->name);
                     if (file_var && file_var->grib_data) {
                         GribVarData *fdata = (GribVarData *)file_var->grib_data;
                         size_t copy_count = fdata->n_times < file_times ?
@@ -1274,7 +1475,8 @@ int grib_read_timeseries_fileset(USFileSet *fs, USVar *var,
     *valid_out = NULL;
     *n_out = 0;
 
-    size_t total = fs->total_times;
+    size_t total = fs->grib_times && fs->grib_n_times > 0 ?
+                   fs->grib_n_times : fs->total_times;
     if (total == 0) return -1;
 
     double *times = calloc(total, sizeof(double));
@@ -1283,6 +1485,55 @@ int grib_read_timeseries_fileset(USFileSet *fs, USVar *var,
     if (!times || !values || !valid) {
         free(times); free(values); free(valid);
         return -1;
+    }
+
+    if (fs->grib_times && fs->grib_n_times > 0) {
+        for (size_t t = 0; t < fs->grib_n_times; t++) {
+            times[t] = fs->grib_times[t];
+            values[t] = var->fill_value;
+            valid[t] = 0;
+
+            for (size_t vt = 0; vt < fs->total_times; vt++) {
+                int file_idx = 0;
+                size_t local_time = 0;
+                if (grib_fileset_map_time(fs, vt, &file_idx, &local_time) != 0) continue;
+                USFile *file = fs->files[file_idx];
+                if (!file) continue;
+                if (!file->vars && var->mesh) {
+                    grib_scan_variables(file, var->mesh);
+                }
+
+                USVar *file_var = grib_find_var(file, var->name);
+                if (!file_var || !file_var->grib_data) continue;
+                GribVarData *fdata = (GribVarData *)file_var->grib_data;
+                if (local_time >= fdata->n_times) continue;
+                if (fdata->times[local_time] != fs->grib_times[t]) continue;
+
+                double *file_ts_times = NULL;
+                float *file_ts_values = NULL;
+                int *file_ts_valid = NULL;
+                size_t file_ts_n = 0;
+
+                int rc = grib_read_timeseries(file_var, node_idx, depth_idx,
+                                               &file_ts_times, &file_ts_values,
+                                               &file_ts_valid, &file_ts_n);
+                if (rc == 0 && local_time < file_ts_n) {
+                    values[t] = file_ts_values[local_time];
+                    valid[t] = file_ts_valid[local_time];
+                }
+
+                free(file_ts_times);
+                free(file_ts_values);
+                free(file_ts_valid);
+                break;
+            }
+        }
+
+        *times_out = times;
+        *values_out = values;
+        *valid_out = valid;
+        *n_out = total;
+        return 0;
     }
 
     size_t out_idx = 0;
@@ -1295,7 +1546,7 @@ int grib_read_timeseries_fileset(USFileSet *fs, USVar *var,
             grib_scan_variables(file, var->mesh);
         }
 
-        USVar *file_var = (f == 0) ? var : grib_find_var(file, var->name);
+        USVar *file_var = grib_find_var(file, var->name);
         if (!file_var) {
             for (size_t t = 0; t < file_times; t++) {
                 times[out_idx + t] = (double)(out_idx + t);
@@ -1354,6 +1605,7 @@ void grib_close_fileset(USFileSet *fs) {
     free(fs->files);
     free(fs->time_offsets);
     free(fs->base_filename);
+    free(fs->grib_times);
     free(fs);
 }
 
