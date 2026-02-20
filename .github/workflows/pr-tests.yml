@@ -13,8 +13,24 @@ permissions:
 
 jobs:
   test:
-    name: Run tests
+    name: Build (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            make_flags: ""
+            run_tests: "true"
+          - name: zarr-only
+            make_flags: "WITH_ZARR=1"
+            run_tests: "false"
+          - name: grib-only
+            make_flags: "WITH_GRIB=1"
+            run_tests: "false"
+          - name: zarr-and-grib
+            make_flags: "WITH_ZARR=1 WITH_GRIB=1"
+            run_tests: "false"
 
     steps:
       - name: Checkout repository
@@ -23,7 +39,24 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnetcdf-dev pkg-config
+          sudo apt-get install -y \
+            libnetcdf-dev \
+            libblosc-dev \
+            liblz4-dev \
+            libeccodes-dev \
+            libx11-dev \
+            libxt-dev \
+            libxaw7-dev \
+            libxmu-dev \
+            libxext-dev \
+            libxpm-dev \
+            pkg-config
 
-      - name: Build and run tests
-        run: make test
+      - name: Build
+        run: |
+          make clean
+          make ${{ matrix.make_flags }} -j"$(nproc)"
+
+      - name: Run tests
+        if: matrix.run_tests == 'true'
+        run: make ${{ matrix.make_flags }} test
