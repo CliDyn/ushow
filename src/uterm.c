@@ -836,6 +836,7 @@ static void cleanup_all(void) {
         current_dim_info = NULL;
         n_current_dims = 0;
     }
+#ifdef HAVE_GRIB
     if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
         for (int i = 0; i < n_variables; i++) {
             if (var_array && var_array[i]) {
@@ -843,6 +844,7 @@ static void cleanup_all(void) {
             }
         }
     }
+#endif
     free(var_array);
     var_array = NULL;
 
