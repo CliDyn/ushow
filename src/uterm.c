@@ -42,6 +42,8 @@
 #define CP_LOWER_HALF_BLOCK 0x2584
 #define CP_FULL_BLOCK 0x2588
 
+static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
+
 /* Global state */
 static USFile *file = NULL;
 static USFileSet *fileset = NULL;
@@ -56,6 +58,8 @@ static USVar *current_var = NULL;
 static USVar **var_array = NULL;
 static int n_variables = 0;
 static int current_var_index = 0;
+static USDimInfo *current_dim_info = NULL;
+static int n_current_dims = 0;
 
 /* Options */
 typedef struct {
@@ -256,6 +260,44 @@ static int set_variable_index(int idx) {
     current_var_index = idx;
     current_var = var_array[idx];
 
+    if (current_dim_info) {
+#ifdef HAVE_GRIB
+        if (current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
+            grib_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+#ifdef HAVE_ZARR
+        if (current_var->file && current_var->file->file_type == FILE_TYPE_ZARR) {
+            zarr_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+        {
+            netcdf_free_dim_info(current_dim_info, n_current_dims);
+        }
+        current_dim_info = NULL;
+        n_current_dims = 0;
+    }
+
+#ifdef HAVE_ZARR
+    if (zarr_fileset) {
+        current_dim_info = zarr_get_dim_info_fileset(zarr_fileset, current_var, &n_current_dims);
+    } else if (current_var->file && current_var->file->file_type == FILE_TYPE_ZARR) {
+        current_dim_info = zarr_get_dim_info(current_var, &n_current_dims);
+    } else
+#endif
+#ifdef HAVE_GRIB
+    if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
+        current_dim_info = grib_get_dim_info_fileset(fileset, current_var, &n_current_dims);
+    } else if (current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
+        current_dim_info = grib_get_dim_info(current_var, &n_current_dims);
+    } else
+#endif
+    if (fileset) {
+        current_dim_info = netcdf_get_dim_info_fileset(fileset, current_var, &n_current_dims);
+    } else {
+        current_dim_info = netcdf_get_dim_info(current_var, &n_current_dims);
+    }
+
     if (view_set_variable(view, current_var, mesh, regrid) != 0) {
         return -1;
     }
@@ -317,6 +359,84 @@ static void save_frame(void) {
     }
 }
 
+static int parse_time_units(const char *units, double *unit_seconds,
+                            int *origin_year, int *origin_month, int *origin_day,
+                            int *origin_hour, int *origin_minute, int *origin_second) {
+    if (!units || !unit_seconds || !origin_year || !origin_month || !origin_day ||
+        !origin_hour || !origin_minute || !origin_second) {
+        return 0;
+    }
+
+    const char *since = strstr(units, " since ");
+    if (!since) return 0;
+
+    if (strncmp(units, "days", since - units) == 0) {
+        *unit_seconds = 86400.0;
+    } else if (strncmp(units, "day", since - units) == 0) {
+        *unit_seconds = 86400.0;
+    } else if (strncmp(units, "hours", since - units) == 0) {
+        *unit_seconds = 3600.0;
+    } else if (strncmp(units, "hour", since - units) == 0) {
+        *unit_seconds = 3600.0;
+    } else if (strncmp(units, "minutes", since - units) == 0) {
+        *unit_seconds = 60.0;
+    } else if (strncmp(units, "minute", since - units) == 0) {
+        *unit_seconds = 60.0;
+    } else if (strncmp(units, "seconds", since - units) == 0) {
+        *unit_seconds = 1.0;
+    } else if (strncmp(units, "second", since - units) == 0) {
+        *unit_seconds = 1.0;
+    } else {
+        return 0;
+    }
+
+    const char *origin = since + strlen(" since ");
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
+    if (sscanf(origin, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s) < 3) {
+        return 0;
+    }
+
+    *origin_year = y;
+    *origin_month = mo;
+    *origin_day = d;
+    *origin_hour = h;
+    *origin_minute = mi;
+    *origin_second = s;
+    return 1;
+}
+
+static int format_time_from_units(char *out, size_t outlen, double value, const char *units) {
+    if (!out || outlen == 0 || !units) return 0;
+
+    double unit_seconds = 0.0;
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
+    if (!parse_time_units(units, &unit_seconds, &y, &mo, &d, &h, &mi, &s)) {
+        return 0;
+    }
+
+    struct tm origin_tm = {0};
+    origin_tm.tm_year = y - 1900;
+    origin_tm.tm_mon = mo - 1;
+    origin_tm.tm_mday = d;
+    origin_tm.tm_hour = h;
+    origin_tm.tm_min = mi;
+    origin_tm.tm_sec = s;
+
+    time_t origin_time = timegm(&origin_tm);
+    if (origin_time == (time_t)-1) return 0;
+
+    double total_seconds = value * unit_seconds;
+    time_t target_time = origin_time + (time_t)llround(total_seconds);
+    struct tm result_tm;
+    if (!gmtime_r(&target_time, &result_tm)) return 0;
+
+    if (result_tm.tm_hour == 0 && result_tm.tm_min == 0 && result_tm.tm_sec == 0) {
+        return strftime(out, outlen, "%Y-%m-%d", &result_tm) > 0;
+    }
+
+    return strftime(out, outlen, "%Y-%m-%d %H:%M:%S", &result_tm) > 0;
+}
+
 static void render_frame(int show_help, int animating) {
     if (!view || !current_var) return;
 
@@ -348,9 +468,35 @@ static void render_frame(int show_help, int animating) {
 
     printf("\x1b[H\x1b[2J");
 
-    printf("uterm | var %d/%d: %s | time %zu/%zu | depth %zu/%zu | %s\n",
+    char time_stamp[64] = "";
+    if (current_dim_info && current_var->time_dim_id >= 0) {
+        const char *dim_name = current_var->dim_names[current_var->time_dim_id];
+        for (int i = 0; i < n_current_dims; i++) {
+            if (strcmp(current_dim_info[i].name, dim_name) == 0 &&
+                current_dim_info[i].values &&
+                view->time_index < current_dim_info[i].size) {
+                double v = current_dim_info[i].values[view->time_index];
+                if (current_dim_info[i].units[0] &&
+                    format_time_from_units(time_stamp, sizeof(time_stamp),
+                                           v, current_dim_info[i].units)) {
+                    char formatted[64];
+                    snprintf(formatted, sizeof(formatted), " %s", time_stamp);
+                    strncpy(time_stamp, formatted, sizeof(time_stamp) - 1);
+                    time_stamp[sizeof(time_stamp) - 1] = '\0';
+                } else if (current_dim_info[i].units[0]) {
+                    snprintf(time_stamp, sizeof(time_stamp), " %.6g %s",
+                             v, current_dim_info[i].units);
+                } else {
+                    snprintf(time_stamp, sizeof(time_stamp), " %.6g", v);
+                }
+                break;
+            }
+        }
+    }
+
+    printf("uterm | var %d/%d: %s | time %zu/%zu%s | depth %zu/%zu | %s\n",
            current_var_index + 1, n_variables, current_var->name,
-           view->time_index + 1, view->n_times,
+           view->time_index + 1, view->n_times, time_stamp,
            view->depth_index + 1, view->n_depths,
            animating ? "anim" : "paused");
 
@@ -673,6 +819,23 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
 }
 
 static void cleanup_all(void) {
+    if (current_dim_info) {
+#ifdef HAVE_GRIB
+        if (current_var && current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
+            grib_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+#ifdef HAVE_ZARR
+        if (current_var && current_var->file && current_var->file->file_type == FILE_TYPE_ZARR) {
+            zarr_free_dim_info(current_dim_info, n_current_dims);
+        } else
+#endif
+        {
+            netcdf_free_dim_info(current_dim_info, n_current_dims);
+        }
+        current_dim_info = NULL;
+        n_current_dims = 0;
+    }
     if (fileset && fileset->files[0]->file_type == FILE_TYPE_GRIB) {
         for (int i = 0; i < n_variables; i++) {
             if (var_array && var_array[i]) {

@@ -107,8 +107,9 @@ static int grib_get_time_value(codes_handle *h, double *time_out) {
     int hour = (int)(time / 100);
     int minute = (int)(time % 100);
 
-    int64_t era = (y >= 0 ? y : y - 399) / 400;
-    unsigned yoe = (unsigned)(y - era * 400);
+    int y_adj = y - (m <= 2);
+    int64_t era = (y_adj >= 0 ? y_adj : y_adj - 399) / 400;
+    unsigned yoe = (unsigned)(y_adj - era * 400);
     unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     int64_t days = (int64_t)(era * 146097 + (int)doe - 719468);
@@ -201,6 +202,34 @@ static void grib_free_var_list_shallow(USVar *list) {
         free(list);
         list = next;
     }
+}
+
+static void grib_apply_fileset_time_dim(USVar *var, const USFileSet *fs) {
+    if (!var || !fs) return;
+    if (fs->grib_n_times <= 1) return;
+
+    if (var->time_dim_id >= 0) {
+        var->dim_sizes[var->time_dim_id] = fs->grib_n_times;
+        strncpy(var->dim_names[var->time_dim_id], GRIB_TIME_DIM_NAME, MAX_NAME_LEN - 1);
+        return;
+    }
+
+    if (var->n_dims >= MAX_DIMS) return;
+
+    for (int i = var->n_dims; i > 0; i--) {
+        var->dim_sizes[i] = var->dim_sizes[i - 1];
+        strncpy(var->dim_names[i], var->dim_names[i - 1], MAX_NAME_LEN - 1);
+        var->dim_names[i][MAX_NAME_LEN - 1] = '\0';
+    }
+
+    var->n_dims++;
+    var->time_dim_id = 0;
+    if (var->depth_dim_id >= 0) var->depth_dim_id++;
+    if (var->node_dim_id >= 0) var->node_dim_id++;
+
+    strncpy(var->dim_names[0], GRIB_TIME_DIM_NAME, MAX_NAME_LEN - 1);
+    var->dim_names[0][MAX_NAME_LEN - 1] = '\0';
+    var->dim_sizes[0] = fs->grib_n_times;
 }
 
 static int is_grib_message(FILE *fp) {
@@ -836,6 +865,7 @@ USVar *grib_scan_variables_fileset(USFileSet *fs, USMesh *mesh) {
             }
             memcpy(copy, v, sizeof(USVar));
             copy->next = NULL;
+            grib_apply_fileset_time_dim(copy, fs);
 
             if (!var_list) var_list = copy;
             else var_tail->next = copy;
