@@ -16,7 +16,8 @@
 /* Dimension name patterns */
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
 static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "deptht", "depthu", "depthv", "depthw", NULL};
-static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d", NULL};
+static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d",
+    "n_node", "n_face", "n_edge", "nCells", "nVertices", "nEdges", NULL};
 static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
 static const char *LON_NAMES[] = {"lon", "longitude", "x", "nlon", "rlon", "i", NULL};
 
@@ -108,6 +109,8 @@ static int is_coord_dim(int ncid __attribute__((unused)), const char *dimname) {
     static const char *COORD_DIMS[] = {
         "lon", "lat", "longitude", "latitude", "x", "y",
         "time", "t", "depth", "z", "lev", "level",
+        "face_lon", "face_lat", "node_lon", "node_lat", "edge_lon", "edge_lat",
+        "lonCell", "latCell", "lonVertex", "latVertex", "lonEdge", "latEdge",
         NULL
     };
     return matches_name_list(dimname, COORD_DIMS);

@@ -382,6 +382,181 @@ static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
 }
 
 /*
+ * Create a test NetCDF file in MPAS UGRID style (face_lon/face_lat on n_face).
+ * Includes node coordinates and face_node_connectivity for completeness.
+ */
+static const char *create_test_netcdf_mpas_ugrid(int n_faces, int n_nodes) {
+    static char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/test_ushow_mpas_ugrid_%d_%d.nc", getpid(), test_file_counter++);
+    unlink(filename);
+
+    int ncid, face_dimid, node_dimid;
+    int face_lon_varid, face_lat_varid, node_lon_varid, node_lat_varid;
+    int data_varid, data2_varid;
+    int status;
+
+    status = nc_create(filename, NC_NETCDF4, &ncid);
+    NC_CHECK(status);
+
+    /* Define dimensions */
+    status = nc_def_dim(ncid, "n_face", n_faces, &face_dimid);
+    NC_CHECK(status);
+    status = nc_def_dim(ncid, "n_node", n_nodes, &node_dimid);
+    NC_CHECK(status);
+
+    /* Face coordinate variables */
+    status = nc_def_var(ncid, "face_lon", NC_FLOAT, 1, &face_dimid, &face_lon_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, face_lon_varid, "standard_name", 9, "longitude");
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, face_lon_varid, "units", 12, "degrees_east");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "face_lat", NC_FLOAT, 1, &face_dimid, &face_lat_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, face_lat_varid, "standard_name", 8, "latitude");
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, face_lat_varid, "units", 13, "degrees_north");
+    NC_CHECK(status);
+
+    /* Node coordinate variables */
+    status = nc_def_var(ncid, "node_lon", NC_FLOAT, 1, &node_dimid, &node_lon_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, node_lon_varid, "units", 12, "degrees_east");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "node_lat", NC_FLOAT, 1, &node_dimid, &node_lat_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, node_lat_varid, "units", 13, "degrees_north");
+    NC_CHECK(status);
+
+    /* Data variables on faces */
+    status = nc_def_var(ncid, "gaussian", NC_FLOAT, 1, &face_dimid, &data_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, data_varid, "long_name", 8, "Gaussian");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "vorticity", NC_FLOAT, 1, &face_dimid, &data2_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, data2_varid, "long_name", 9, "Vorticity");
+    NC_CHECK(status);
+
+    status = nc_enddef(ncid);
+    NC_CHECK(status);
+
+    /* Write coordinate data */
+    float *face_lon = malloc(n_faces * sizeof(float));
+    float *face_lat = malloc(n_faces * sizeof(float));
+    float *node_lon = malloc(n_nodes * sizeof(float));
+    float *node_lat = malloc(n_nodes * sizeof(float));
+    float *data = malloc(n_faces * sizeof(float));
+    float *data2 = malloc(n_faces * sizeof(float));
+
+    if (!face_lon || !face_lat || !node_lon || !node_lat || !data || !data2) {
+        free(face_lon); free(face_lat); free(node_lon); free(node_lat);
+        free(data); free(data2);
+        nc_close(ncid);
+        return NULL;
+    }
+
+    for (int i = 0; i < n_faces; i++) {
+        unsigned int seed = (unsigned int)i * 1103515245U + 12345U;
+        face_lon[i] = -180.0f + 360.0f * (float)(seed % 10000) / 10000.0f;
+        seed = seed * 1103515245U + 12345U;
+        face_lat[i] = -90.0f + 180.0f * (float)(seed % 10000) / 10000.0f;
+        data[i] = 0.1f + 0.9f * (float)(i % 100) / 100.0f;
+        data2[i] = -1.0f + 2.0f * (float)i / (float)n_faces;
+    }
+
+    for (int i = 0; i < n_nodes; i++) {
+        unsigned int seed = (unsigned int)(i + n_faces) * 1103515245U + 12345U;
+        node_lon[i] = -180.0f + 360.0f * (float)(seed % 10000) / 10000.0f;
+        seed = seed * 1103515245U + 12345U;
+        node_lat[i] = -90.0f + 180.0f * (float)(seed % 10000) / 10000.0f;
+    }
+
+    nc_put_var_float(ncid, face_lon_varid, face_lon);
+    nc_put_var_float(ncid, face_lat_varid, face_lat);
+    nc_put_var_float(ncid, node_lon_varid, node_lon);
+    nc_put_var_float(ncid, node_lat_varid, node_lat);
+    nc_put_var_float(ncid, data_varid, data);
+    nc_put_var_float(ncid, data2_varid, data2);
+
+    free(face_lon); free(face_lat); free(node_lon); free(node_lat);
+    free(data); free(data2);
+
+    nc_close(ncid);
+    return filename;
+}
+
+/*
+ * Create a test NetCDF file in native MPAS style (lonCell/latCell on nCells, in radians).
+ */
+static const char *create_test_netcdf_mpas_native(int n_cells) {
+    static char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/test_ushow_mpas_native_%d_%d.nc", getpid(), test_file_counter++);
+    unlink(filename);
+
+    int ncid, cell_dimid;
+    int lon_varid, lat_varid, data_varid;
+    int status;
+
+    status = nc_create(filename, NC_NETCDF4, &ncid);
+    NC_CHECK(status);
+
+    status = nc_def_dim(ncid, "nCells", n_cells, &cell_dimid);
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "lonCell", NC_DOUBLE, 1, &cell_dimid, &lon_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, lon_varid, "units", 7, "radians");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "latCell", NC_DOUBLE, 1, &cell_dimid, &lat_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, lat_varid, "units", 7, "radians");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "temperature", NC_FLOAT, 1, &cell_dimid, &data_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, data_varid, "long_name", 11, "Temperature");
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, data_varid, "units", 1, "K");
+    NC_CHECK(status);
+
+    status = nc_enddef(ncid);
+    NC_CHECK(status);
+
+    double *lon = malloc(n_cells * sizeof(double));
+    double *lat = malloc(n_cells * sizeof(double));
+    float *data = malloc(n_cells * sizeof(float));
+
+    if (!lon || !lat || !data) {
+        free(lon); free(lat); free(data);
+        nc_close(ncid);
+        return NULL;
+    }
+
+    /* Coordinates in radians */
+    for (int i = 0; i < n_cells; i++) {
+        unsigned int seed = (unsigned int)i * 1103515245U + 12345U;
+        lon[i] = -3.14159265 + 6.28318530 * (double)(seed % 10000) / 10000.0;
+        seed = seed * 1103515245U + 12345U;
+        lat[i] = -1.57079632 + 3.14159265 * (double)(seed % 10000) / 10000.0;
+        data[i] = 250.0f + 50.0f * (float)i / (float)n_cells;
+    }
+
+    nc_put_var_double(ncid, lon_varid, lon);
+    nc_put_var_double(ncid, lat_varid, lat);
+    nc_put_var_float(ncid, data_varid, data);
+
+    free(lon); free(lat); free(data);
+
+    nc_close(ncid);
+    return filename;
+}
+
+/*
  * Remove a test file.
  */
 static void cleanup_test_file(const char *filename) {

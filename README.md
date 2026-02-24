@@ -184,6 +184,12 @@ GRIB file (requires `make WITH_GRIB=1`):
 ./uterm data.grib --color
 ```
 
+MPAS unstructured data:
+```bash
+./ushow data.nc grid.nc                # MPAS UGRID (face_lon/face_lat)
+./ushow mpas_output.nc                 # Native MPAS (lonCell/latCell)
+```
+
 Zarr store with consolidated metadata (faster loading):
 ```bash
 # Zarr stores with .zmetadata file are loaded more efficiently
@@ -286,15 +292,15 @@ The test suite includes:
 ## Coordinate Detection
 
 Automatically searches for coordinate variables by common names:
-- Longitude: lon, longitude, x, nav_lon, glon, xt_ocean, xu_ocean, xh, xq
-- Latitude: lat, latitude, y, nav_lat, glat, yt_ocean, yu_ocean, yh, yq
+- Longitude: lon, longitude, x, nav_lon, glon, xt_ocean, xu_ocean, xh, xq, face_lon, node_lon, edge_lon, lonCell, lonVertex, lonEdge
+- Latitude: lat, latitude, y, nav_lat, glat, yt_ocean, yu_ocean, yh, yq, face_lat, node_lat, edge_lat, latCell, latVertex, latEdge
 
 ## Dimension Detection
 
 Automatically identifies dimension roles:
 - Time: time, t
 - Depth: depth, z, lev, level, nz, nz1
-- Nodes: nod2, nod2d, node, nodes, ncells, npoints
+- Nodes: nod2, nod2d, node, nodes, ncells, npoints, n_node, n_face, n_edge, nCells, nVertices, nEdges
 
 ## Output
 

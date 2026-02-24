@@ -21,12 +21,16 @@
 /* Common coordinate variable names to search for */
 static const char *LON_NAMES[] = {
   "lon", "longitude", "x", "nav_lon", "glon", "clon",
-    "xt_ocean", "xu_ocean", "xh", "xq", NULL
+    "xt_ocean", "xu_ocean", "xh", "xq",
+    "face_lon", "node_lon", "edge_lon",
+    "lonCell", "lonVertex", "lonEdge", NULL
 };
 
 static const char *LAT_NAMES[] = {
   "lat", "latitude", "y", "nav_lat", "glat", "clat",
-    "yt_ocean", "yu_ocean", "yh", "yq", NULL
+    "yt_ocean", "yu_ocean", "yh", "yq",
+    "face_lat", "node_lat", "edge_lat",
+    "latCell", "latVertex", "latEdge", NULL
 };
 
 /* Check if units string indicates radians */
@@ -220,7 +224,9 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     /* Check if dimension names suggest unstructured (node-like) coordinates */
     static const char *NODE_DIM_NAMES[] = {
         "nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d",
-        "cell", "cells", "elem", "vertex", "vertices", NULL
+        "cell", "cells", "elem", "vertex", "vertices",
+        "n_node", "n_face", "n_edge",
+        "nCells", "nVertices", "nEdges", NULL
     };
     int lon_is_node_dim = 0, lat_is_node_dim = 0;
     for (int i = 0; NODE_DIM_NAMES[i] != NULL; i++) {
@@ -665,13 +671,19 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
     int status, varid;
     
     /* Try to find face_nodes variable (UGRID convention) */
-    status = nc_inq_varid(ncid, "face_nodes", &varid);
-    if (status != NC_NOERR) {
-        /* Try alternate names */
-        status = nc_inq_varid(ncid, "elem", &varid);
-        if (status != NC_NOERR) {
-            return -1;  /* No connectivity found - not an error, just no polygon mode */
+    static const char *CONN_NAMES[] = {
+        "face_nodes", "face_node_connectivity", "elem", NULL
+    };
+    int found_conn = 0;
+    for (int i = 0; CONN_NAMES[i] != NULL; i++) {
+        status = nc_inq_varid(ncid, CONN_NAMES[i], &varid);
+        if (status == NC_NOERR) {
+            found_conn = 1;
+            break;
         }
+    }
+    if (!found_conn) {
+        return -1;  /* No connectivity found - not an error, just no polygon mode */
     }
     
     /* Get dimensions */
