@@ -212,7 +212,7 @@ endif
 
 # Add yac sources if enabled
 ifdef WITH_YAC
-COMMON_SRCS += $(SRCDIR)/regrid_yac.c
+COMMON_SRCS += $(SRCDIR)/regrid_yac.c $(SRCDIR)/healpix.c
 endif
 
 USHOW_OBJS = $(USHOW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
@@ -308,7 +308,8 @@ endif
 # YAC dependencies (when WITH_YAC is set)
 ifdef WITH_YAC
 $(OBJDIR)/regrid_yac.o: $(SRCDIR)/regrid_yac.c $(SRCDIR)/regrid_yac.h \
-                         $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
+                         $(SRCDIR)/healpix.h $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/healpix.o: $(SRCDIR)/healpix.c $(SRCDIR)/healpix.h $(SRCDIR)/ushow.defines.h
 endif
 
 # Print configuration

@@ -356,7 +356,7 @@ By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured
 | `avg_dist` | Cell averaging, distance-weighted |
 | `avg_bary` | Cell averaging, barycentric |
 
-NNN methods work with any grid type (point clouds or unstructured meshes). Averaging methods require element connectivity (e.g., FESOM triangular meshes).
+NNN methods work with any grid type. Averaging methods require element connectivity — for grids that lack it (reduced Gaussian, HEALPix, etc.), ushow auto-generates a triangulation from latitude bands.
 
 ## Data Flow
 

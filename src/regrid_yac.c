@@ -9,6 +9,7 @@
 #ifdef HAVE_YAC
 
 #include "regrid_yac.h"
+#include "healpix.h"
 #include <mpi.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -315,9 +316,14 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
 
     if (yac_method_needs_connectivity(method) &&
         (mesh->n_elements == 0 || mesh->elem_nodes == NULL)) {
-        fprintf(stderr, "YAC regrid: method '%s' requires element connectivity\n",
-                yac_method_name(method));
-        return NULL;
+        /* Try to auto-generate connectivity from latitude bands */
+        printf("YAC: Auto-generating connectivity for method '%s'...\n",
+               yac_method_name(method));
+        if (latband_generate_connectivity(mesh) != 0) {
+            fprintf(stderr, "YAC regrid: method '%s' requires element connectivity "
+                    "and auto-generation failed\n", yac_method_name(method));
+            return NULL;
+        }
     }
 
     /* Conservative methods require cell-based source data (YAC_LOC_CELL).
