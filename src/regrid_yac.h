@@ -89,6 +89,11 @@ int yac_method_parse(const char *name, USYacMethod *out);
 int yac_method_needs_connectivity(USYacMethod m);
 
 /*
+ * Get current interpolation method.
+ */
+USYacMethod yac_regrid_get_method(const USYacRegrid *r);
+
+/*
  * Free regridding structure.
  */
 void yac_regrid_free(USYacRegrid *r);

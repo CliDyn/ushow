@@ -196,7 +196,8 @@ Options:
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
   -i, --influence <m>    Influence radius in meters (default: 200000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
-  --yac-method <method>  Use YAC interpolation (requires WITH_YAC=1 build)
+  --yac-method <method>  Use YAC interpolation (requires WITH_YAC=1 build);
+                         click the method button in the GUI to cycle methods at runtime
   -h, --help             Show help message
 ```
 
@@ -324,6 +325,7 @@ The test suite includes:
   - Blue data line with dots at data points; gaps shown for fill/missing values
   - Works with both single files and multi-file datasets
   - When files have different time epochs, values are automatically normalized to a common reference
+- **YAC method button** (when `--yac-method` is used): Click to cycle through interpolation methods: `avg_arith` -> `avg_dist` -> `avg_bary` -> `nnn1` -> `nnn4dist` -> `nnn4gauss`
 - **Dimension panel**: Shows dimension names, ranges, current values
 - **Colorbar**: Min/max and intermediate labels update as you adjust range
 
@@ -345,7 +347,7 @@ The test suite includes:
 
 ## Interpolation Methods
 
-By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured data onto a regular grid. With YAC support (`make WITH_YAC=1`), additional interpolation methods are available via `--yac-method`:
+By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured data onto a regular grid. With YAC support (`make WITH_YAC=1`), additional interpolation methods are available via `--yac-method`. Once launched, click the method button in the GUI to cycle through methods at runtime:
 
 | Method | Description |
 |--------|-------------|

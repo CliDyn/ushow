@@ -142,6 +142,12 @@ static MouseClickCallback mouse_click_cb = NULL;
 /* Render mode button */
 static Widget render_mode_button = NULL;
 
+#ifdef HAVE_YAC
+/* YAC method button */
+static Widget yac_method_button = NULL;
+static YacMethodCallback yac_method_cb = NULL;
+#endif
+
 /* State */
 static size_t current_n_times = 1;
 static size_t current_n_depths = 1;
@@ -233,6 +239,13 @@ static void render_mode_callback_fn(Widget w, XtPointer client_data, XtPointer c
     (void)w; (void)client_data; (void)call_data;
     if (render_mode_cb) render_mode_cb();
 }
+
+#ifdef HAVE_YAC
+static void yac_method_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)client_data; (void)call_data;
+    if (yac_method_cb) yac_method_cb();
+}
+#endif
 
 static void range_button_callback_fn(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)client_data; (void)call_data;
@@ -746,6 +759,26 @@ void x_update_render_mode_label(const char *mode_name) {
         XtVaSetValues(render_mode_button, XtNlabel, mode_name, NULL);
     }
 }
+
+#ifdef HAVE_YAC
+void x_set_yac_method_callback(YacMethodCallback cb) { yac_method_cb = cb; }
+
+void x_setup_yac_method_button(const char *initial_label) {
+    if (!optionbox) return;
+    yac_method_button = XtVaCreateManagedWidget(
+        initial_label ? initial_label : "yac", commandWidgetClass, optionbox,
+        XtNwidth, BUTTON_WIDTH + 30,
+        XtNresize, False,
+        NULL);
+    XtAddCallback(yac_method_button, XtNcallback, yac_method_callback_fn, NULL);
+}
+
+void x_update_yac_method_label(const char *label) {
+    if (yac_method_button && label) {
+        XtVaSetValues(yac_method_button, XtNlabel, label, NULL);
+    }
+}
+#endif
 
 /* ========== Variable Selector ========== */
 

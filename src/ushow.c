@@ -491,6 +491,43 @@ static void on_render_mode_toggle(void) {
     }
 }
 
+#ifdef HAVE_YAC
+/* Averaging first (preserves continents for ocean data), then NNN */
+static const USYacMethod yac_cycle_order[] = {
+    YAC_METHOD_AVERAGE_ARITH,
+    YAC_METHOD_AVERAGE_DIST,
+    YAC_METHOD_AVERAGE_BARY,
+    YAC_METHOD_NNN_1,
+    YAC_METHOD_NNN_4_DIST,
+    YAC_METHOD_NNN_4_GAUSS,
+};
+#define YAC_CYCLE_COUNT (sizeof(yac_cycle_order)/sizeof(yac_cycle_order[0]))
+
+static void on_yac_method_cycle(void) {
+    if (!view || !yac_regrid_ptr) return;
+
+    USYacMethod cur = yac_regrid_get_method(yac_regrid_ptr);
+    /* Find current position in cycle, advance by 1 */
+    int pos = 0;
+    for (int i = 0; i < (int)YAC_CYCLE_COUNT; i++) {
+        if (yac_cycle_order[i] == cur) { pos = i; break; }
+    }
+    USYacMethod next = yac_cycle_order[(pos + 1) % YAC_CYCLE_COUNT];
+
+    yac_regrid_free(yac_regrid_ptr);
+    yac_regrid_ptr = yac_regrid_create(mesh, options.target_resolution, next);
+    if (!yac_regrid_ptr) {
+        /* Fallback to avg_arith */
+        yac_regrid_ptr = yac_regrid_create(
+            mesh, options.target_resolution, YAC_METHOD_AVERAGE_ARITH);
+    }
+    view_set_yac_regrid(view, yac_regrid_ptr);
+    x_update_yac_method_label(yac_method_name(
+        yac_regrid_get_method(yac_regrid_ptr)));
+    update_display();
+}
+#endif
+
 static void update_dim_info_current(void) {
     if (!view || !current_dim_info) return;
 
@@ -1313,6 +1350,9 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_YAC
     if (yac_regrid_ptr) {
         view_set_yac_regrid(view, yac_regrid_ptr);
+        x_setup_yac_method_button(yac_method_name(
+            yac_regrid_get_method(yac_regrid_ptr)));
+        x_set_yac_method_callback(on_yac_method_cycle);
     }
 #endif
 

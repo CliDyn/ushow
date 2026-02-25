@@ -519,7 +519,10 @@ void view_free(USView *view) {
 
 #ifdef HAVE_YAC
 void view_set_yac_regrid(USView *view, void *yac_regrid) {
-    if (view) view->yac_regrid = yac_regrid;
+    if (view) {
+        view->yac_regrid = yac_regrid;
+        view->data_valid = 0;
+    }
 }
 #endif
 

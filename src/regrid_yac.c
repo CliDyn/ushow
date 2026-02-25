@@ -545,6 +545,10 @@ void yac_regrid_get_lonlat(const USYacRegrid *r, size_t ix, size_t iy,
     if (lat) *lat = r->target_lat_min + (iy + 0.5) * r->target_dlat;
 }
 
+USYacMethod yac_regrid_get_method(const USYacRegrid *r) {
+    return r ? r->method : YAC_METHOD_NNN_1;
+}
+
 void yac_regrid_free(USYacRegrid *r) {
     if (!r) return;
     if (r->interp) yac_interpolation_delete(r->interp);

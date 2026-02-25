@@ -142,4 +142,14 @@ void x_main_loop(void);
  */
 void x_cleanup(void);
 
+#ifdef HAVE_YAC
+/*
+ * YAC method cycling button.
+ */
+typedef void (*YacMethodCallback)(void);
+void x_set_yac_method_callback(YacMethodCallback cb);
+void x_setup_yac_method_button(const char *initial_label);
+void x_update_yac_method_label(const char *label);
+#endif
+
 #endif /* X_INTERFACE_H */
