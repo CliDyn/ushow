@@ -262,6 +262,7 @@ MPAS unstructured data:
 
 YAC interpolation (requires `make WITH_YAC=1`):
 ```bash
+./ushow temp.nc -m mesh.nc --yac                    # Default avg_arith, cycle in GUI
 ./ushow temp.nc -m mesh.nc --yac-method nnn4dist    # 4-NN distance-weighted
 ./ushow temp.nc -m mesh.nc --yac-method nnn4gauss   # 4-NN Gaussian-weighted
 ./ushow temp.nc -m mesh.nc --yac-method avg_arith   # Cell averaging
