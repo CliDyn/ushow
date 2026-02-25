@@ -9,7 +9,7 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 
 ## Features
 
-- **Multiple formats**: Supports netCDF, zarr and GRIB
+- **Multiple formats**: Supports netCDF, zarr, GRIB, and MITgcm binary (MDS)
 - **Unified data handling**: Treats all data as collections of points with lon/lat coordinates
 - **Fast visualization**: KDTree-based nearest-neighbor interpolation to regular grid
 - **X11/Xaw interface**: Works over SSH with X forwarding
@@ -189,7 +189,7 @@ No libraries should show as "not found".
 ## Usage
 
 ```bash
-./ushow [options] <data_file.nc|data.zarr|data.grib> [file2 ...]
+./ushow [options] <data_file.nc|data.zarr|data.grib|mitgcm_dir> [file2 ...]
 
 Options:
   -m, --mesh <file>      Mesh file with coordinates (for unstructured data)
@@ -258,6 +258,12 @@ GRIB file (requires `make WITH_GRIB=1`):
 ./uterm data.grib --color
 ```
 
+MITgcm binary data (MDS format, always compiled — no extra libraries):
+```bash
+./ushow /path/to/mitgcm/run           # Open directory with .data/.meta files
+./ushow /path/to/diags3D.0000008760.data  # Open specific .data file (uses parent dir)
+```
+
 MPAS unstructured data:
 ```bash
 ./ushow data.nc grid.nc                # MPAS UGRID (face_lon/face_lat)
@@ -310,6 +316,7 @@ The test suite includes:
 - **test_range_popup**: Range popup logic (symmetric computation, value parsing)
 - **test_timeseries**: Time series reading, multi-file concatenation, and CF time unit conversion
 - **test_file_netcdf**: NetCDF file I/O
+- **test_file_mitgcm**: MITgcm MDS binary file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_yac_3d**: Per-depth masked YAC interpolation (when built with `WITH_YAC=1`)
 - **test_integration**: End-to-end workflow tests
@@ -389,6 +396,13 @@ The first visit to each new depth level builds a masked interpolation (timing de
 ## Supported Data Formats
 
 - **NetCDF**: Full support (NetCDF-3 and NetCDF-4)
+- **MITgcm MDS**: Binary `.data`/`.meta` file pairs (always compiled, no extra libraries)
+  - Reads grid coordinates from XC/YC binary files
+  - Supports 2D and 3D diagnostic fields with multiple variables per file
+  - Automatic land masking via hFacC grid file
+  - Depth levels from RC grid file
+  - Multi-timestep iteration discovery
+  - Note: velocity fields (UVEL/VVEL) are shown in local grid coordinates on LLC/cubed-sphere grids; geographic rotation requires AngleCS/AngleSN grid files (not yet implemented)
 - **Zarr**: v2 format (requires `make WITH_ZARR=1`)
   - Compression: LZ4, Blosc (with various inner codecs), or uncompressed
   - Data types: Float32, Float64, Int64

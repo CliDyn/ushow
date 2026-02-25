@@ -4,6 +4,7 @@
 
 #include "view.h"
 #include "file_netcdf.h"
+#include "file_mitgcm.h"
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
@@ -137,6 +138,9 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 
     /* Estimate data range if not set */
     if (!var->range_set) {
+        if (var->file && var->file->file_type == FILE_TYPE_MITGCM) {
+            mitgcm_estimate_range(var, &var->global_min, &var->global_max);
+        } else
 #ifdef HAVE_ZARR
         if (var->file && var->file->file_type == FILE_TYPE_ZARR) {
             zarr_estimate_range(var, &var->global_min, &var->global_max);
@@ -432,6 +436,10 @@ int view_update(USView *view) {
 
     /* Read data slice - dispatch based on file type */
     int read_result;
+    if (view->variable->file && view->variable->file->file_type == FILE_TYPE_MITGCM) {
+        read_result = mitgcm_read_slice(view->variable, view->time_index,
+                                        view->depth_index, view->raw_data);
+    } else
 #ifdef HAVE_ZARR
     if (view->fileset && view->fileset->files[0]->file_type == FILE_TYPE_ZARR) {
         /* Zarr multi-file */
