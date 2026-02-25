@@ -557,6 +557,106 @@ static const char *create_test_netcdf_mpas_native(int n_cells) {
 }
 
 /*
+ * Create a test NetCDF file in native MPAS style with cellsOnVertex connectivity.
+ * Builds a simple icosahedron-like mesh: n_cells cells with n_vertices Voronoi
+ * vertices, each connecting 3 cells (vertexDegree=3).
+ * Some boundary vertices reference cell 0 (invalid in 1-based) to test filtering.
+ */
+static const char *create_test_netcdf_mpas_with_connectivity(
+    int n_cells, int n_vertices, int n_boundary) {
+    static char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/test_ushow_mpas_conn_%d_%d.nc",
+             getpid(), test_file_counter++);
+    unlink(filename);
+
+    int ncid, cell_dimid, vert_dimid, vdeg_dimid;
+    int lon_varid, lat_varid, data_varid, cov_varid;
+    int dimids[2];
+    int status;
+
+    status = nc_create(filename, NC_NETCDF4, &ncid);
+    NC_CHECK(status);
+
+    /* Dimensions */
+    status = nc_def_dim(ncid, "nCells", n_cells, &cell_dimid);
+    NC_CHECK(status);
+    status = nc_def_dim(ncid, "nVertices", n_vertices, &vert_dimid);
+    NC_CHECK(status);
+    status = nc_def_dim(ncid, "vertexDegree", 3, &vdeg_dimid);
+    NC_CHECK(status);
+
+    /* Cell center coordinates (radians) */
+    status = nc_def_var(ncid, "lonCell", NC_DOUBLE, 1, &cell_dimid, &lon_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, lon_varid, "units", 7, "radians");
+    NC_CHECK(status);
+
+    status = nc_def_var(ncid, "latCell", NC_DOUBLE, 1, &cell_dimid, &lat_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, lat_varid, "units", 7, "radians");
+    NC_CHECK(status);
+
+    /* cellsOnVertex(nVertices, vertexDegree) — 1-based indices */
+    dimids[0] = vert_dimid;
+    dimids[1] = vdeg_dimid;
+    status = nc_def_var(ncid, "cellsOnVertex", NC_INT, 2, dimids, &cov_varid);
+    NC_CHECK(status);
+
+    /* Data variable */
+    status = nc_def_var(ncid, "temperature", NC_FLOAT, 1, &cell_dimid, &data_varid);
+    NC_CHECK(status);
+
+    status = nc_enddef(ncid);
+    NC_CHECK(status);
+
+    /* Write coordinates */
+    double *lon = malloc(n_cells * sizeof(double));
+    double *lat = malloc(n_cells * sizeof(double));
+    float *data = malloc(n_cells * sizeof(float));
+    int *cov = malloc(n_vertices * 3 * sizeof(int));
+
+    if (!lon || !lat || !data || !cov) {
+        free(lon); free(lat); free(data); free(cov);
+        nc_close(ncid);
+        return NULL;
+    }
+
+    for (int i = 0; i < n_cells; i++) {
+        unsigned int seed = (unsigned int)i * 1103515245U + 12345U;
+        lon[i] = -3.14159265 + 6.28318530 * (double)(seed % 10000) / 10000.0;
+        seed = seed * 1103515245U + 12345U;
+        lat[i] = -1.57079632 + 3.14159265 * (double)(seed % 10000) / 10000.0;
+        data[i] = 273.0f + (float)i;
+    }
+
+    /* Build cellsOnVertex: interior vertices reference valid cells (1-based),
+     * boundary vertices reference cell 0 (invalid) */
+    for (int v = 0; v < n_vertices; v++) {
+        if (v < n_boundary) {
+            /* Boundary: one index is 0 (invalid) */
+            cov[v * 3 + 0] = 0;
+            cov[v * 3 + 1] = (v % n_cells) + 1;
+            cov[v * 3 + 2] = ((v + 1) % n_cells) + 1;
+        } else {
+            /* Interior: all valid, 1-based */
+            cov[v * 3 + 0] = (v % n_cells) + 1;
+            cov[v * 3 + 1] = ((v + 1) % n_cells) + 1;
+            cov[v * 3 + 2] = ((v + 2) % n_cells) + 1;
+        }
+    }
+
+    nc_put_var_double(ncid, lon_varid, lon);
+    nc_put_var_double(ncid, lat_varid, lat);
+    nc_put_var_float(ncid, data_varid, data);
+    nc_put_var_int(ncid, cov_varid, cov);
+
+    free(lon); free(lat); free(data); free(cov);
+
+    nc_close(ncid);
+    return filename;
+}
+
+/*
  * Remove a test file.
  */
 static void cleanup_test_file(const char *filename) {

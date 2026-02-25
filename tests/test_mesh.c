@@ -3,6 +3,7 @@
  */
 
 #include "test_framework.h"
+#include "test_utils.h"
 #define _USE_MATH_DEFINES
 #include <math.h>
 #include "../src/ushow.defines.h"
@@ -359,6 +360,94 @@ TEST(meters_to_chord_half_circumference) {
     double chord = meters_to_chord(half_circ);
 
     ASSERT_NEAR(chord, 2.0, EPSILON);
+    return 1;
+}
+
+/* Test MPAS cellsOnVertex connectivity loading */
+TEST(mpas_connectivity_loads) {
+    int n_cells = 20, n_vertices = 30, n_boundary = 5;
+    const char *filename = create_test_netcdf_mpas_with_connectivity(
+        n_cells, n_vertices, n_boundary);
+    ASSERT_NOT_NULL(filename);
+
+    int ncid;
+    int status = nc_open(filename, NC_NOWRITE, &ncid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    USMesh *mesh = mesh_create_from_netcdf(ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+    nc_close(ncid);
+
+    /* Should have loaded MPAS connectivity */
+    ASSERT_GT(mesh->n_elements, 0);
+    ASSERT_EQ_INT(mesh->n_vertices, 3);
+    ASSERT_NOT_NULL(mesh->elem_nodes);
+
+    /* Boundary vertices (referencing cell 0) should be skipped */
+    ASSERT_EQ_SIZET(mesh->n_elements, (size_t)(n_vertices - n_boundary));
+
+    /* All indices must be in range [0, n_cells) */
+    for (size_t i = 0; i < mesh->n_elements; i++) {
+        int a = mesh->elem_nodes[i * 3 + 0];
+        int b = mesh->elem_nodes[i * 3 + 1];
+        int c = mesh->elem_nodes[i * 3 + 2];
+        ASSERT_GE(a, 0);
+        ASSERT_LT(a, n_cells);
+        ASSERT_GE(b, 0);
+        ASSERT_LT(b, n_cells);
+        ASSERT_GE(c, 0);
+        ASSERT_LT(c, n_cells);
+    }
+
+    mesh_free(mesh);
+    cleanup_test_file(filename);
+    return 1;
+}
+
+/* Test MPAS connectivity: all-boundary file produces zero elements */
+TEST(mpas_connectivity_all_boundary) {
+    int n_cells = 10, n_vertices = 8, n_boundary = 8;
+    const char *filename = create_test_netcdf_mpas_with_connectivity(
+        n_cells, n_vertices, n_boundary);
+    ASSERT_NOT_NULL(filename);
+
+    int ncid;
+    int status = nc_open(filename, NC_NOWRITE, &ncid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    USMesh *mesh = mesh_create_from_netcdf(ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+    nc_close(ncid);
+
+    /* All vertices are boundary -> all triangles skipped */
+    ASSERT_EQ_SIZET(mesh->n_elements, 0);
+
+    mesh_free(mesh);
+    cleanup_test_file(filename);
+    return 1;
+}
+
+/* Test MPAS connectivity: no boundary vertices */
+TEST(mpas_connectivity_no_boundary) {
+    int n_cells = 15, n_vertices = 20, n_boundary = 0;
+    const char *filename = create_test_netcdf_mpas_with_connectivity(
+        n_cells, n_vertices, n_boundary);
+    ASSERT_NOT_NULL(filename);
+
+    int ncid;
+    int status = nc_open(filename, NC_NOWRITE, &ncid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    USMesh *mesh = mesh_create_from_netcdf(ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+    nc_close(ncid);
+
+    /* No boundary -> all triangles kept */
+    ASSERT_EQ_SIZET(mesh->n_elements, (size_t)n_vertices);
+    ASSERT_EQ_INT(mesh->n_vertices, 3);
+
+    mesh_free(mesh);
+    cleanup_test_file(filename);
     return 1;
 }
 

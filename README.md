@@ -262,6 +262,7 @@ MPAS unstructured data:
 ```bash
 ./ushow data.nc grid.nc                # MPAS UGRID (face_lon/face_lat)
 ./ushow mpas_output.nc                 # Native MPAS (lonCell/latCell)
+./ushow mpas_output.nc --yac -r 0.1    # MPAS with YAC interpolation (uses native cellsOnVertex connectivity)
 ```
 
 YAC interpolation (requires `make WITH_YAC=1`):
@@ -367,7 +368,7 @@ By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured
 | `avg_dist` | Cell averaging, distance-weighted |
 | `avg_bary` | Cell averaging, barycentric |
 
-NNN methods work with any grid type. Averaging methods require element connectivity — for grids that lack it (reduced Gaussian, HEALPix, etc.), ushow auto-generates a triangulation from latitude bands.
+NNN methods work with any grid type. Averaging methods require element connectivity — for grids that lack it (reduced Gaussian, HEALPix, etc.), ushow auto-generates a triangulation from latitude bands. For MPAS grids, native dual-mesh connectivity (`cellsOnVertex`) is read directly from the file.
 
 ### Per-Depth Masking (`--yac-3d`)
 

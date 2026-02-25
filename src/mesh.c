@@ -666,10 +666,115 @@ USMesh *mesh_create_from_zarr(USFile *file) {
 
 #endif /* HAVE_ZARR */
 
+/* Try to load MPAS dual-mesh connectivity (cellsOnVertex).
+ * In MPAS, each Voronoi vertex connects exactly 3 cells.
+ * cellsOnVertex(nVertices, vertexDegree=3) gives triangle connectivity
+ * where the "vertices" of each triangle are cell centers (our mesh points).
+ * Boundary triangles referencing cell 0 (invalid in 1-based) are skipped.
+ */
+static int load_mpas_connectivity(USMesh *mesh, int ncid) {
+    int varid, status;
+
+    status = nc_inq_varid(ncid, "cellsOnVertex", &varid);
+    if (status != NC_NOERR) return -1;
+
+    int ndims;
+    nc_inq_varndims(ncid, varid, &ndims);
+    if (ndims != 2) return -1;
+
+    int dimids[2];
+    size_t dim_sizes[2];
+    nc_inq_vardimid(ncid, varid, dimids);
+    nc_inq_dimlen(ncid, dimids[0], &dim_sizes[0]);
+    nc_inq_dimlen(ncid, dimids[1], &dim_sizes[1]);
+
+    /* Expect (nVertices, vertexDegree=3) */
+    size_t n_tri_raw, vdeg;
+    if (dim_sizes[1] == 3) {
+        n_tri_raw = dim_sizes[0];
+        vdeg = dim_sizes[1];
+    } else if (dim_sizes[0] == 3) {
+        n_tri_raw = dim_sizes[1];
+        vdeg = dim_sizes[0];
+    } else {
+        return -1;  /* Not a triangle dual mesh */
+    }
+
+    int *raw = malloc(n_tri_raw * vdeg * sizeof(int));
+    if (!raw) return -1;
+
+    status = nc_get_var_int(ncid, varid, raw);
+    if (status != NC_NOERR) {
+        free(raw);
+        return -1;
+    }
+
+    int transpose = (dim_sizes[0] == 3);
+
+    /* First pass: count valid triangles (skip those referencing cell 0 = boundary) */
+    size_t n_valid = 0;
+    for (size_t i = 0; i < n_tri_raw; i++) {
+        int v0, v1, v2;
+        if (transpose) {
+            v0 = raw[0 * n_tri_raw + i];
+            v1 = raw[1 * n_tri_raw + i];
+            v2 = raw[2 * n_tri_raw + i];
+        } else {
+            v0 = raw[i * 3 + 0];
+            v1 = raw[i * 3 + 1];
+            v2 = raw[i * 3 + 2];
+        }
+        if (v0 > 0 && v1 > 0 && v2 > 0) n_valid++;
+    }
+
+    int *elem_nodes = malloc(n_valid * 3 * sizeof(int));
+    if (!elem_nodes) {
+        free(raw);
+        return -1;
+    }
+
+    /* Second pass: store valid triangles, convert to 0-based */
+    size_t out = 0;
+    for (size_t i = 0; i < n_tri_raw; i++) {
+        int v0, v1, v2;
+        if (transpose) {
+            v0 = raw[0 * n_tri_raw + i];
+            v1 = raw[1 * n_tri_raw + i];
+            v2 = raw[2 * n_tri_raw + i];
+        } else {
+            v0 = raw[i * 3 + 0];
+            v1 = raw[i * 3 + 1];
+            v2 = raw[i * 3 + 2];
+        }
+        if (v0 > 0 && v1 > 0 && v2 > 0) {
+            /* Also validate indices are within range */
+            if ((size_t)(v0 - 1) < mesh->n_points &&
+                (size_t)(v1 - 1) < mesh->n_points &&
+                (size_t)(v2 - 1) < mesh->n_points) {
+                elem_nodes[out * 3 + 0] = v0 - 1;
+                elem_nodes[out * 3 + 1] = v1 - 1;
+                elem_nodes[out * 3 + 2] = v2 - 1;
+                out++;
+            }
+        }
+    }
+
+    free(raw);
+
+    mesh->n_elements = out;
+    mesh->n_vertices = 3;
+    mesh->elem_nodes = elem_nodes;
+
+    printf("Loaded MPAS dual-mesh connectivity: %zu triangles from cellsOnVertex "
+           "(%zu raw, %zu boundary skipped)\n",
+           out, n_tri_raw, n_tri_raw - out);
+    return 0;
+}
+
 /* Load element connectivity from mesh file for polygon rendering */
 static int load_element_connectivity(USMesh *mesh, int ncid) {
     int status, varid;
-    
+
     /* Try to find face_nodes variable (UGRID convention) */
     static const char *CONN_NAMES[] = {
         "face_nodes", "face_node_connectivity", "elem", NULL
@@ -683,9 +788,10 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
         }
     }
     if (!found_conn) {
-        return -1;  /* No connectivity found - not an error, just no polygon mode */
+        /* Try MPAS dual-mesh connectivity (cellsOnVertex) */
+        return load_mpas_connectivity(mesh, ncid);
     }
-    
+
     /* Get dimensions */
     int ndims;
     nc_inq_varndims(ncid, varid, &ndims);
@@ -693,13 +799,13 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
         fprintf(stderr, "face_nodes: expected 2D, got %dD\n", ndims);
         return -1;
     }
-    
+
     int dimids[2];
     size_t dim_sizes[2];
     nc_inq_vardimid(ncid, varid, dimids);
     nc_inq_dimlen(ncid, dimids[0], &dim_sizes[0]);
     nc_inq_dimlen(ncid, dimids[1], &dim_sizes[1]);
-    
+
     /* Determine which dimension is vertices (n3=3) vs elements */
     size_t n_vertices, n_elements;
     int transpose = 0;
@@ -715,32 +821,32 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
         fprintf(stderr, "face_nodes: cannot identify vertex dimension\n");
         return -1;
     }
-    
+
     printf("Loading element connectivity: %zu elements, %zu vertices each\n",
            n_elements, n_vertices);
-    
+
     /* Allocate and read connectivity */
     int *raw_data = malloc(n_elements * n_vertices * sizeof(int));
     if (!raw_data) return -1;
-    
+
     status = nc_get_var_int(ncid, varid, raw_data);
     if (status != NC_NOERR) {
         fprintf(stderr, "Failed to read face_nodes: %s\n", nc_strerror(status));
         free(raw_data);
         return -1;
     }
-    
+
     /* Get start_index attribute (1-based or 0-based indexing) */
     int start_index = 1;  /* Default to 1-based (Fortran) */
     nc_get_att_int(ncid, varid, "start_index", &start_index);
-    
+
     /* Allocate final array and transpose if needed */
     mesh->elem_nodes = malloc(n_elements * n_vertices * sizeof(int));
     if (!mesh->elem_nodes) {
         free(raw_data);
         return -1;
     }
-    
+
     if (transpose) {
         /* Data is (n3, elem), transpose to (elem, n3) and convert to 0-based */
         for (size_t e = 0; e < n_elements; e++) {
@@ -755,12 +861,12 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
             mesh->elem_nodes[i] = raw_data[i] - start_index;
         }
     }
-    
+
     free(raw_data);
-    
+
     mesh->n_elements = n_elements;
     mesh->n_vertices = (int)n_vertices;
-    
+
     printf("Loaded %zu triangular elements for polygon rendering\n", n_elements);
     return 0;
 }
