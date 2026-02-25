@@ -808,7 +808,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay (default: 200)\n");
     fprintf(stderr, "  -p, --polygon-only     Skip regridding, use polygon mode only (faster)\n");
 #ifdef HAVE_YAC
-    fprintf(stderr, "      --yac-method <m>   Use YAC interpolation method:\n");
+    fprintf(stderr, "      --yac              Use YAC interpolation (default: avg_arith)\n");
+    fprintf(stderr, "      --yac-method <m>   Use YAC with specific method:\n");
     fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
     fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
     fprintf(stderr, "                         conserv1, conserv2\n");
@@ -834,6 +835,7 @@ int main(int argc, char *argv[]) {
         {"delay",        required_argument, 0, 'd'},
         {"polygon-only", no_argument,       0, 'p'},
 #ifdef HAVE_YAC
+        {"yac",          no_argument,       0, 1099},
         {"yac-method",   required_argument, 0, 1100},
 #endif
         {"help",         no_argument,       0, 'h'},
@@ -860,6 +862,9 @@ int main(int argc, char *argv[]) {
                 options.polygon_only = 1;
                 break;
 #ifdef HAVE_YAC
+            case 1099:
+                options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
+                break;
             case 1100: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {

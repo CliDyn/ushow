@@ -196,7 +196,8 @@ Options:
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
   -i, --influence <m>    Influence radius in meters (default: 200000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
-  --yac-method <method>  Use YAC interpolation (requires WITH_YAC=1 build);
+  --yac                  Use YAC interpolation with default method (avg_arith)
+  --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
   -h, --help             Show help message
 ```
