@@ -183,6 +183,7 @@ COMMON_SRCS = $(SRCDIR)/kdtree.c \
               $(SRCDIR)/mesh.c \
               $(SRCDIR)/regrid.c \
               $(SRCDIR)/file_netcdf.c \
+              $(SRCDIR)/file_mitgcm.c \
               $(SRCDIR)/colormaps.c \
               $(SRCDIR)/view.c
 
@@ -274,6 +275,7 @@ $(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/regrid.o: $(SRCDIR)/regrid.c $(SRCDIR)/regrid.h $(SRCDIR)/mesh.h \
                     $(SRCDIR)/kdtree.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/file_netcdf.o: $(SRCDIR)/file_netcdf.c $(SRCDIR)/file_netcdf.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/file_mitgcm.o: $(SRCDIR)/file_mitgcm.c $(SRCDIR)/file_mitgcm.h $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/colormaps.o: $(SRCDIR)/colormaps.c $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/view.o: $(SRCDIR)/view.c $(SRCDIR)/view.h $(SRCDIR)/file_netcdf.h \
                   $(SRCDIR)/regrid.h $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h

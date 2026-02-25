@@ -45,6 +45,7 @@ typedef enum {
 typedef enum {
     FILE_TYPE_UNKNOWN = 0,
     FILE_TYPE_NETCDF,
+    FILE_TYPE_MITGCM,
 #ifdef HAVE_ZARR
     FILE_TYPE_ZARR,
 #endif
@@ -143,6 +144,9 @@ struct USVar {
     USFile     *file;
     int         varid;              /* NetCDF variable ID */
 
+    /* MITgcm-specific */
+    void       *mitgcm_data;       /* MitgcmVarData* for MITgcm variables */
+
 #ifdef HAVE_ZARR
     /* Zarr-specific */
     void       *zarr_data;          /* ZarrArray* for zarr variables */
@@ -165,6 +169,9 @@ struct USFile {
 
     /* NetCDF-specific */
     int         ncid;               /* NetCDF file ID */
+
+    /* MITgcm-specific */
+    void       *mitgcm_data;       /* MitgcmStore* for MITgcm files */
 
 #ifdef HAVE_ZARR
     /* Zarr-specific */

@@ -87,7 +87,7 @@ endif
 SRCDIR = ../src
 
 # Test executables
-TEST_TARGETS = test_kdtree test_mesh test_regrid test_colormaps test_file_netcdf test_integration test_term_render_mode test_range_popup test_timeseries test_latband
+TEST_TARGETS = test_kdtree test_mesh test_regrid test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband
 
 # Add zarr test if enabled
 ifdef WITH_ZARR
@@ -110,6 +110,7 @@ MESH_OBJ = $(SRCDIR)/mesh.c
 REGRID_OBJ = $(SRCDIR)/regrid.c
 COLORMAPS_OBJ = $(SRCDIR)/colormaps.c
 FILE_NETCDF_OBJ = $(SRCDIR)/file_netcdf.c
+FILE_MITGCM_OBJ = $(SRCDIR)/file_mitgcm.c
 FILE_GRIB_OBJ = $(SRCDIR)/file_grib.c
 
 # Zarr support files (only when WITH_ZARR=1)
@@ -141,6 +142,9 @@ test_colormaps: test_colormaps.c $(COLORMAPS_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_file_netcdf: test_file_netcdf.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+test_file_mitgcm: test_file_mitgcm.c $(FILE_MITGCM_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_integration: test_integration.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ) $(REGRID_OBJ) $(COLORMAPS_OBJ)
@@ -216,6 +220,9 @@ test-colormaps: test_colormaps
 test-netcdf: test_file_netcdf
 	./test_file_netcdf
 
+test-mitgcm: test_file_mitgcm
+	./test_file_mitgcm
+
 test-integration: test_integration
 	./test_integration
 
@@ -245,6 +252,7 @@ clean:
 	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
+	rm -rf /tmp/test_mitgcm_*
 
 # Verbose build for debugging
 verbose: CFLAGS += -v

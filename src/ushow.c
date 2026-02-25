@@ -11,6 +11,7 @@
 #include "regrid_yac.h"
 #endif
 #include "file_netcdf.h"
+#include "file_mitgcm.h"
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
@@ -87,6 +88,9 @@ static void on_var_select(int var_index) {
 
     /* Set up dimension info panel */
     if (current_dim_info) {
+        if (prev_var && prev_var->file && prev_var->file->file_type == FILE_TYPE_MITGCM) {
+            mitgcm_free_dim_info(current_dim_info, n_current_dims);
+        } else
 #ifdef HAVE_GRIB
         if (prev_var && prev_var->file && prev_var->file->file_type == FILE_TYPE_GRIB) {
             grib_free_dim_info(current_dim_info, n_current_dims);
@@ -97,6 +101,9 @@ static void on_var_select(int var_index) {
         }
     }
     /* Use fileset dimension info if available (includes virtual time) */
+    if (var->file && var->file->file_type == FILE_TYPE_MITGCM) {
+        current_dim_info = mitgcm_get_dim_info(var, &n_current_dims);
+    } else
 #ifdef HAVE_ZARR
     if (zarr_fileset) {
         current_dim_info = zarr_get_dim_info_fileset(zarr_fileset, var, &n_current_dims);
@@ -305,6 +312,10 @@ static void on_mouse_click(int px, int py) {
     size_t n_out = 0;
     int rc;
 
+    if (current_var->file && current_var->file->file_type == FILE_TYPE_MITGCM) {
+        rc = mitgcm_read_timeseries(current_var, node_idx, view->depth_index,
+                                    &times, &values, &valid, &n_out);
+    } else
 #ifdef HAVE_ZARR
     if (zarr_fileset) {
         rc = zarr_read_timeseries_fileset(zarr_fileset, current_var, node_idx,
@@ -943,6 +954,14 @@ int main(int argc, char *argv[]) {
     printf("Opening data file(s)...\n");
 
     if (!use_glob && n_data_files == 1) {
+        if (mitgcm_is_mitgcm(data_filenames[0])) {
+            printf("Detected MITgcm data: %s\n", data_filenames[0]);
+            file = mitgcm_open(data_filenames[0]);
+            if (!file) {
+                fprintf(stderr, "Failed to open MITgcm data: %s\n", data_filenames[0]);
+                return 1;
+            }
+        } else
 #ifdef HAVE_ZARR
         /* Check if first file is a zarr store */
         if (zarr_is_zarr_store(data_filenames[0])) {
@@ -1092,6 +1111,14 @@ int main(int argc, char *argv[]) {
 
     /* Load mesh */
     printf("Loading mesh...\n");
+    if (file->file_type == FILE_TYPE_MITGCM) {
+        mesh = mitgcm_create_mesh(file);
+        if (!mesh) {
+            fprintf(stderr, "Failed to load mesh from MITgcm grid files\n");
+            mitgcm_close(file);
+            return 1;
+        }
+    } else
 #ifdef HAVE_ZARR
     if (file->file_type == FILE_TYPE_ZARR) {
         /* For zarr, load coordinates from the store itself */
@@ -1169,6 +1196,9 @@ int main(int argc, char *argv[]) {
 
     /* Scan for variables */
     printf("Scanning for variables...\n");
+    if (file->file_type == FILE_TYPE_MITGCM) {
+        variables = mitgcm_scan_variables(file, mesh);
+    } else
 #ifdef HAVE_ZARR
     if (file->file_type == FILE_TYPE_ZARR) {
         variables = zarr_scan_variables(file, mesh);
@@ -1238,6 +1268,9 @@ int main(int argc, char *argv[]) {
     int n_init_dims = 0;
     if (max_var) {
         /* Use fileset dimension info if available (includes virtual time) */
+        if (file->file_type == FILE_TYPE_MITGCM) {
+            init_dims = mitgcm_get_dim_info(max_var, &n_init_dims);
+        } else
 #ifdef HAVE_ZARR
         if (zarr_fileset) {
             init_dims = zarr_get_dim_info_fileset(zarr_fileset, max_var, &n_init_dims);
