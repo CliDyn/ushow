@@ -42,6 +42,12 @@ For optional GRIB support:
 brew install eccodes
 ```
 
+For optional YAC interpolation support (professional-grade interpolation methods):
+```bash
+brew install open-mpi autoconf automake libtool
+```
+Then build YAXT and YAC from source (see [YAC Interpolation](#yac-interpolation) below).
+
 Install [XQuartz](https://www.xquartz.org/) for X11 support. After installation, the X11 libraries will be in `/opt/X11`.
 
 Build:
@@ -49,6 +55,7 @@ Build:
 make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support
 make WITH_GRIB=1      # With grib support
+make WITH_YAC=1       # With YAC interpolation support
 make uterm            # Build terminal viewer only
 ```
 
@@ -71,11 +78,18 @@ For optional GRIB support:
 sudo apt-get install libeccodes-dev
 ```
 
+For optional YAC interpolation support:
+```bash
+sudo apt-get install libopenmpi-dev autoconf automake libtool
+```
+Then build YAXT and YAC from source (see [YAC Interpolation](#yac-interpolation) below).
+
 Build:
 ```bash
 make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support
 make WITH_GRIB=1      # With grib support
+make WITH_YAC=1       # With YAC interpolation support
 make uterm            # Build terminal viewer only
 ```
 
@@ -90,9 +104,62 @@ No modules need to be loaded. Simply run:
 make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support (uses system blosc/lz4)
 make WITH_GRIB=1      # With grib support (uses system eccodes)
+make WITH_YAC=1       # With YAC interpolation support
 ```
 
 The binary will have the library paths embedded (via rpath), so it runs without setting `LD_LIBRARY_PATH`.
+
+### YAC Interpolation
+
+YAC (Yet Another Coupler) provides professional-grade interpolation methods beyond the built-in nearest-neighbor. It requires building two libraries from source: YAXT and YAC.
+
+#### 1. Build YAXT
+
+Get YAXT source from https://swprojects.dkrz.de/redmine/projects/yaxt (or `git clone https://gitlab.dkrz.de/dkrz-sw/yaxt.git`).
+
+```bash
+cd /path/to/yaxt
+scripts/reconfigure
+mkdir build && cd build
+../configure \
+  MPI_LAUNCH="mpirun --map-by socket:OVERSUBSCRIBE" \
+  --prefix=$HOME/local/yaxt \
+  --disable-shared \
+  CC=mpicc FC=mpif90
+make -j4
+make install
+```
+
+On macOS, a cosmetic `date: illegal time format` warning during `scripts/reconfigure` can be ignored.
+
+#### 2. Build YAC
+
+Get YAC source from https://gitlab.dkrz.de/dkrz-sw/yac (version 3.14.0 or later).
+
+```bash
+cd /path/to/yac
+./autogen.sh
+./configure \
+  --prefix=$HOME/local/yac \
+  --with-yaxt-root=$HOME/local/yaxt \
+  --disable-mci --disable-utils --disable-examples \
+  --disable-tools --disable-fortran-bindings \
+  CC=mpicc
+make -j4
+make install
+```
+
+On macOS, if configure fails with a shell error, prefix the command with `CONFIG_SHELL=/bin/bash /bin/bash`.
+
+#### 3. Build ushow with YAC
+
+```bash
+make clean
+make WITH_YAC=1                              # Auto-detects at ~/local/yac
+make WITH_YAC=1 YAC_PREFIX=/custom/path/yac  # Custom install location
+```
+
+The Makefile uses `pkg-config` to find YAC, with a fallback to `YAC_PREFIX` (default: `$HOME/local/yac`).
 
 ### Custom Library Paths
 
@@ -129,6 +196,7 @@ Options:
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
   -i, --influence <m>    Influence radius in meters (default: 200000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
+  --yac-method <method>  Use YAC interpolation (requires WITH_YAC=1 build)
   -h, --help             Show help message
 ```
 
@@ -188,6 +256,13 @@ MPAS unstructured data:
 ```bash
 ./ushow data.nc grid.nc                # MPAS UGRID (face_lon/face_lat)
 ./ushow mpas_output.nc                 # Native MPAS (lonCell/latCell)
+```
+
+YAC interpolation (requires `make WITH_YAC=1`):
+```bash
+./ushow temp.nc -m mesh.nc --yac-method nnn4dist    # 4-NN distance-weighted
+./ushow temp.nc -m mesh.nc --yac-method nnn4gauss   # 4-NN Gaussian-weighted
+./ushow temp.nc -m mesh.nc --yac-method avg_arith   # Cell averaging
 ```
 
 Zarr store with consolidated metadata (faster loading):
@@ -268,11 +343,26 @@ The test suite includes:
 - `s`: save current frame as PPM (`<var>_t<time>_d<depth>.ppm`)
 - `?`: toggle extended help line
 
+## Interpolation Methods
+
+By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured data onto a regular grid. With YAC support (`make WITH_YAC=1`), additional interpolation methods are available via `--yac-method`:
+
+| Method | Description |
+|--------|-------------|
+| `nnn1` | Single nearest neighbor (similar to default KDTree) |
+| `nnn4dist` | 4 nearest neighbors, distance-weighted |
+| `nnn4gauss` | 4 nearest neighbors, Gaussian-weighted |
+| `avg_arith` | Cell averaging, arithmetic mean |
+| `avg_dist` | Cell averaging, distance-weighted |
+| `avg_bary` | Cell averaging, barycentric |
+
+NNN methods work with any grid type (point clouds or unstructured meshes). Averaging methods require element connectivity (e.g., FESOM triangular meshes).
+
 ## Data Flow
 
 1. Load mesh coordinates (from mesh file or data file)
 2. Convert lon/lat to Cartesian coordinates on unit sphere
-3. Build KDTree from source points (one-time)
+3. Build KDTree from source points (one-time), or compute YAC interpolation weights
 4. For each target grid cell, find nearest source point (one-time)
 5. Per frame: read data slice, apply regrid indices, convert to pixels
 
