@@ -252,6 +252,7 @@ typedef struct {
     int         polygon_only;       /* Skip regridding, polygon mode only */
 #ifdef HAVE_YAC
     int         yac_method;        /* YAC interpolation method (-1 = disabled) */
+    int         yac_3d;            /* Per-depth masked interpolation */
 #endif
 } USOptions;
 

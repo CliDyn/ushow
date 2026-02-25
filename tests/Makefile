@@ -43,6 +43,25 @@ CFLAGS += $(ZARR_CFLAGS)
 LIBS += $(ZARR_LIBS)
 endif
 
+# YAC support (optional) - build with: make WITH_YAC=1
+ifdef WITH_YAC
+YAC_PREFIX ?= $(HOME)/local/yac
+YAC_PKG_CFLAGS := $(shell PKG_CONFIG_PATH=$(YAC_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH pkg-config --cflags yac-core 2>/dev/null)
+YAC_PKG_LIBS := $(shell PKG_CONFIG_PATH=$(YAC_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH pkg-config --libs yac-core 2>/dev/null)
+
+ifneq ($(strip $(YAC_PKG_CFLAGS)$(YAC_PKG_LIBS)),)
+  YAC_CFLAGS := -DHAVE_YAC $(YAC_PKG_CFLAGS)
+  YAC_LIBS := $(YAC_PKG_LIBS)
+else
+  YAC_CFLAGS := -DHAVE_YAC -I$(YAC_PREFIX)/include
+  YAC_LIBS := -L$(YAC_PREFIX)/lib -lyac_core -lyac_clapack -Wl,-rpath,$(YAC_PREFIX)/lib
+endif
+
+CC = mpicc
+CFLAGS += $(YAC_CFLAGS)
+LIBS += $(YAC_LIBS)
+endif
+
 # GRIB support (optional) - build with: make WITH_GRIB=1
 ifdef WITH_GRIB
 GRIB_PKG_CFLAGS := $(shell pkg-config --cflags eccodes 2>/dev/null)
@@ -78,6 +97,11 @@ endif
 # Add grib test if enabled
 ifdef WITH_GRIB
 TEST_TARGETS += test_file_grib
+endif
+
+# Add yac test if enabled
+ifdef WITH_YAC
+TEST_TARGETS += test_yac_3d
 endif
 
 # Object files needed from main project
@@ -146,6 +170,11 @@ test_latband: test_latband.c $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 test_file_grib: test_file_grib.c $(FILE_GRIB_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
+# YAC 3D test (only built with WITH_YAC=1)
+REGRID_YAC_OBJ = $(SRCDIR)/regrid_yac.c
+test_yac_3d: test_yac_3d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
 # Run all tests
 test: run-tests
 
@@ -208,9 +237,12 @@ test-zarr: test_file_zarr
 test-grib: test_file_grib
 	./test_file_grib
 
+test-yac-3d: test_yac_3d
+	./test_yac_3d
+
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband
+	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 
@@ -241,6 +273,7 @@ help:
 	@echo "  test-zarr    - Run Zarr tests only (requires WITH_ZARR=1)"
 	@echo "  test-latband - Run latitude-band connectivity tests"
 	@echo "  test-grib    - Run GRIB tests only (requires WITH_GRIB=1)"
+	@echo "  test-yac-3d  - Run YAC 3D tests only (requires WITH_YAC=1)"
 	@echo "  test-integration - Run Integration tests only"
 	@echo "  test-term-render-mode - Run terminal render mode tests only"
 	@echo "  test-range-popup - Run range popup logic tests only"

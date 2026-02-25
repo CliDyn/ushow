@@ -94,6 +94,27 @@ int yac_method_needs_connectivity(USYacMethod m);
 USYacMethod yac_regrid_get_method(const USYacRegrid *r);
 
 /*
+ * Enable per-depth masked interpolation (--yac-3d).
+ */
+void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh);
+
+/*
+ * Clear per-depth cache (call on variable change).
+ */
+void yac_regrid_clear_depth_cache(USYacRegrid *r);
+
+/*
+ * Check if 3d mode is enabled.
+ */
+int yac_regrid_is_3d(const USYacRegrid *r);
+
+/*
+ * Apply with per-depth masking. Builds/caches masked interpolation on first access.
+ */
+void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
+                          const float *src, float fill, float *dst);
+
+/*
  * Free regridding structure.
  */
 void yac_regrid_free(USYacRegrid *r);

@@ -54,6 +54,7 @@ static USOptions options = {
     .frame_delay_ms = 200,
 #ifdef HAVE_YAC
     .yac_method = -1,
+    .yac_3d = 0,
 #endif
 };
 
@@ -521,6 +522,8 @@ static void on_yac_method_cycle(void) {
         yac_regrid_ptr = yac_regrid_create(
             mesh, options.target_resolution, YAC_METHOD_AVERAGE_ARITH);
     }
+    if (options.yac_3d)
+        yac_regrid_enable_3d(yac_regrid_ptr, mesh);
     view_set_yac_regrid(view, yac_regrid_ptr);
     x_update_render_mode_label(yac_method_name(
         yac_regrid_get_method(yac_regrid_ptr)));
@@ -813,6 +816,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
     fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
     fprintf(stderr, "                         conserv1, conserv2\n");
+    fprintf(stderr, "      --yac-3d           Per-depth masked interpolation for 3D variables\n");
 #endif
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
@@ -837,6 +841,7 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_YAC
         {"yac",          no_argument,       0, 1099},
         {"yac-method",   required_argument, 0, 1100},
+        {"yac-3d",       no_argument,       0, 1101},
 #endif
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
@@ -876,6 +881,11 @@ int main(int argc, char *argv[]) {
                 options.yac_method = (int)ym;
                 break;
             }
+            case 1101:
+                options.yac_3d = 1;
+                if (options.yac_method < 0)
+                    options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
+                break;
 #endif
             case 'h':
             default:
@@ -1132,6 +1142,8 @@ int main(int argc, char *argv[]) {
                 mesh_free(mesh);
                 return 1;
             }
+            if (options.yac_3d)
+                yac_regrid_enable_3d(yac_regrid_ptr, mesh);
         } else
 #endif
         {

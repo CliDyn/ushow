@@ -39,6 +39,12 @@ struct USYacRegrid {
     double *tgt_buf;   /* [n_tgt_points] */
 
     USYacMethod method;
+    double resolution;  /* target grid resolution (for rebuilding) */
+
+    /* Per-depth cache (--yac-3d) */
+    USMesh *mesh_ref;                        /* non-owned, for lazy creation */
+    struct yac_interpolation **depth_cache;  /* [depth_cache_n], NULL = not yet built */
+    size_t depth_cache_n;                    /* 0 = 3d mode not enabled */
 };
 
 static int mpi_initialized_by_us = 0;
@@ -308,6 +314,111 @@ static enum yac_location get_tgt_location(USYacMethod method) {
     return YAC_LOC_CELL;
 }
 
+/*
+ * Build a single YAC interpolation object.
+ * If src_mask is non-NULL, applies it to the source grid corners.
+ * Returns NULL on failure.
+ */
+static struct yac_interpolation *
+build_interpolation(USMesh *mesh, USYacMethod method,
+                    double resolution,
+                    const int *src_mask) {
+    /* 1. Build grids */
+    struct yac_basic_grid *src_grid = build_source_grid(mesh, method);
+    if (!src_grid) return NULL;
+
+    /* Apply source mask if provided */
+    size_t mask_idx = SIZE_MAX;
+    if (src_mask) {
+        mask_idx = yac_basic_grid_add_mask(
+            src_grid, YAC_LOC_CORNER, src_mask, mesh->n_points, "depth_mask");
+    }
+
+    size_t nx, ny;
+    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, &nx, &ny);
+    if (!tgt_grid) {
+        yac_basic_grid_delete(src_grid);
+        return NULL;
+    }
+
+    /* 2. Create distributed grid pair */
+    struct yac_dist_grid_pair *grid_pair =
+        yac_dist_grid_pair_new(src_grid, tgt_grid, MPI_COMM_SELF);
+    if (!grid_pair) {
+        yac_basic_grid_delete(src_grid);
+        yac_basic_grid_delete(tgt_grid);
+        return NULL;
+    }
+
+    /* 3. Set up interpolation fields */
+    struct yac_interp_field src_field = {
+        .location = get_src_location(method),
+        .coordinates_idx = SIZE_MAX,
+        .masks_idx = mask_idx
+    };
+    struct yac_interp_field tgt_field = {
+        .location = get_tgt_location(method),
+        .coordinates_idx = 0,
+        .masks_idx = SIZE_MAX
+    };
+
+    struct yac_interp_grid *interp_grid = yac_interp_grid_new(
+        grid_pair, "source", "target", 1, &src_field, tgt_field);
+    if (!interp_grid) {
+        yac_dist_grid_pair_delete(grid_pair);
+        yac_basic_grid_delete(src_grid);
+        yac_basic_grid_delete(tgt_grid);
+        return NULL;
+    }
+
+    /* 4. Configure interpolation method */
+    struct yac_interp_stack_config *stack_config = build_interp_stack(method);
+    if (!stack_config) {
+        yac_interp_grid_delete(interp_grid);
+        yac_dist_grid_pair_delete(grid_pair);
+        yac_basic_grid_delete(src_grid);
+        yac_basic_grid_delete(tgt_grid);
+        return NULL;
+    }
+
+    struct interp_method **methods = yac_interp_stack_config_generate(stack_config);
+    yac_interp_stack_config_delete(stack_config);
+    if (!methods) {
+        yac_interp_grid_delete(interp_grid);
+        yac_dist_grid_pair_delete(grid_pair);
+        yac_basic_grid_delete(src_grid);
+        yac_basic_grid_delete(tgt_grid);
+        return NULL;
+    }
+
+    /* 5. Compute weights */
+    struct yac_interp_weights *weights =
+        yac_interp_method_do_search(methods, interp_grid);
+    yac_interp_method_delete(methods);
+    if (!weights) {
+        yac_interp_grid_delete(interp_grid);
+        yac_dist_grid_pair_delete(grid_pair);
+        yac_basic_grid_delete(src_grid);
+        yac_basic_grid_delete(tgt_grid);
+        return NULL;
+    }
+
+    /* 6. Create interpolation object */
+    struct yac_interpolation *interp = yac_interp_weights_get_interpolation(
+        weights,
+        YAC_MAPPING_ON_TGT, 1, YAC_FRAC_MASK_NO_VALUE,
+        1.0, 0.0, NULL, 1, 1);
+
+    /* 7. Cleanup intermediates */
+    yac_interp_weights_delete(weights);
+    yac_interp_grid_delete(interp_grid);
+    yac_dist_grid_pair_delete(grid_pair);
+    yac_basic_grid_delete(src_grid);
+    yac_basic_grid_delete(tgt_grid);
+
+    return interp;
+}
+
 USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method) {
     if (!mesh || mesh->n_points == 0) {
         fprintf(stderr, "YAC regrid: invalid mesh\n");
@@ -474,6 +585,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     r->target_dlon = 360.0 / (double)nx;
     r->target_dlat = 180.0 / (double)ny;
     r->method = method;
+    r->resolution = resolution;
     r->n_src_points = mesh->n_points;
     r->n_tgt_points = nx * ny;
     r->interp = interp;
@@ -549,8 +661,103 @@ USYacMethod yac_regrid_get_method(const USYacRegrid *r) {
     return r ? r->method : YAC_METHOD_NNN_1;
 }
 
+void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh) {
+    if (r) r->mesh_ref = mesh;
+}
+
+void yac_regrid_clear_depth_cache(USYacRegrid *r) {
+    if (!r || !r->depth_cache) return;
+    for (size_t i = 0; i < r->depth_cache_n; i++) {
+        if (r->depth_cache[i] && r->depth_cache[i] != r->interp) {
+            yac_interpolation_delete(r->depth_cache[i]);
+        }
+    }
+    free(r->depth_cache);
+    r->depth_cache = NULL;
+    r->depth_cache_n = 0;
+}
+
+int yac_regrid_is_3d(const USYacRegrid *r) {
+    return r && r->mesh_ref != NULL;
+}
+
+void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
+                          const float *src, float fill, float *dst) {
+    if (!r || !src || !dst) return;
+
+    /* Lazy-allocate depth cache array */
+    if (!r->depth_cache) {
+        r->depth_cache = calloc(n_depths, sizeof(struct yac_interpolation *));
+        if (!r->depth_cache) return;
+        r->depth_cache_n = n_depths;
+    }
+
+    /* Build masked interpolation for this depth if not cached */
+    if (!r->depth_cache[depth_idx]) {
+        /* Scan source data for fill values to build mask */
+        size_t n = r->n_src_points;
+        int all_valid = 1;
+        int *mask = malloc(n * sizeof(int));
+        if (!mask) {
+            /* Fallback to unmasked */
+            yac_regrid_apply(r, src, fill, dst);
+            return;
+        }
+        for (size_t i = 0; i < n; i++) {
+            mask[i] = (src[i] != fill) ? 1 : 0;
+            if (!mask[i]) all_valid = 0;
+        }
+
+        if (all_valid) {
+            /* No masking needed — reuse base interpolation (sentinel) */
+            r->depth_cache[depth_idx] = r->interp;
+            free(mask);
+        } else {
+            double t0 = get_time_seconds();
+            struct yac_interpolation *masked =
+                build_interpolation(r->mesh_ref, r->method,
+                                    r->resolution, mask);
+            free(mask);
+
+            if (masked) {
+                r->depth_cache[depth_idx] = masked;
+            } else {
+                /* Fallback to unmasked */
+                r->depth_cache[depth_idx] = r->interp;
+            }
+            double t1 = get_time_seconds();
+            printf("YAC 3D: Built masked interpolation for depth %zu (%.2fs)\n",
+                   depth_idx, t1 - t0);
+        }
+    }
+
+    /* Execute interpolation using the cached object */
+    struct yac_interpolation *interp = r->depth_cache[depth_idx];
+    size_t n_src = r->n_src_points;
+    size_t n_tgt = r->n_tgt_points;
+
+    double *src_d = r->src_buf;
+    for (size_t i = 0; i < n_src; i++)
+        src_d[i] = (double)src[i];
+
+    double *tgt_d = r->tgt_buf;
+    for (size_t i = 0; i < n_tgt; i++)
+        tgt_d[i] = (double)fill;
+
+    double *src_field_ptr = src_d;
+    double **src_fields_ptr = &src_field_ptr;
+    double ***src_collection = &src_fields_ptr;
+    double **tgt_collection = &tgt_d;
+
+    yac_interpolation_execute(interp, src_collection, tgt_collection);
+
+    for (size_t i = 0; i < n_tgt; i++)
+        dst[i] = (float)tgt_d[i];
+}
+
 void yac_regrid_free(USYacRegrid *r) {
     if (!r) return;
+    yac_regrid_clear_depth_cache(r);
     if (r->interp) yac_interpolation_delete(r->interp);
     free(r->src_buf);
     free(r->tgt_buf);

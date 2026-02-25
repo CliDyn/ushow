@@ -78,6 +78,7 @@ typedef struct {
     char glyph_ramp[128];
 #ifdef HAVE_YAC
     int yac_method;
+    int yac_3d;
 #endif
 } UTermOptions;
 
@@ -91,6 +92,7 @@ static UTermOptions options = {
     .glyph_ramp = DEFAULT_GLYPH_RAMP,
 #ifdef HAVE_YAC
     .yac_method = -1,
+    .yac_3d = 0,
 #endif
 };
 
@@ -243,6 +245,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
     fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
     fprintf(stderr, "                         conserv1, conserv2\n");
+    fprintf(stderr, "      --yac-3d           Per-depth masked interpolation for 3D variables\n");
 #endif
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
@@ -929,6 +932,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"no-color", no_argument, 0, 1002},
 #ifdef HAVE_YAC
         {"yac-method", required_argument, 0, 1100},
+        {"yac-3d", no_argument, 0, 1101},
 #endif
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -985,6 +989,11 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.yac_method = (int)ym;
                 break;
             }
+            case 1101:
+                options.yac_3d = 1;
+                if (options.yac_method < 0)
+                    options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
+                break;
 #endif
             default:
                 print_usage(argv[0]);
@@ -1055,6 +1064,8 @@ int main(int argc, char *argv[]) {
             cleanup_all();
             return 1;
         }
+        if (options.yac_3d)
+            yac_regrid_enable_3d(yac_regrid_ptr, mesh);
     } else
 #endif
     {
