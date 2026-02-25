@@ -35,6 +35,8 @@ typedef struct {
     int nx, ny, nz;
     float *depth_values;         /* RC[nz] */
     float *hfac;                 /* hFacC[nz*ny*nx], NULL if unavailable */
+    float *angle_cs;             /* AngleCS[ny*nx], NULL if unavailable */
+    float *angle_sn;             /* AngleSN[ny*nx], NULL if unavailable */
     float missing_value;
 } MitgcmStore;
 
@@ -47,6 +49,8 @@ typedef struct {
     int nx, ny, nz;
     float missing_value;
     int has_missing;
+    int velocity_component;      /* 0=none, 1=U-component, 2=V-component */
+    USVar *paired_velocity;      /* paired U/V variable, NULL if unpaired */
 } MitgcmVarData;
 
 /* ---- Byte swapping ---- */
@@ -435,9 +439,38 @@ USFile *mitgcm_open(const char *path) {
         }
     }
 
+    /* Load AngleCS/AngleSN (or CS/SN) for velocity rotation */
+    {
+        size_t grid_size = (size_t)ny * nx;
+        char cs_path[MAX_NAME_LEN], sn_path[MAX_NAME_LEN];
+
+        /* Try AngleCS.data / AngleSN.data first */
+        snprintf(cs_path, sizeof(cs_path), "%s/AngleCS.data", directory);
+        snprintf(sn_path, sizeof(sn_path), "%s/AngleSN.data", directory);
+        if (!file_exists(cs_path) || !file_exists(sn_path)) {
+            /* Fall back to CS.data / SN.data */
+            snprintf(cs_path, sizeof(cs_path), "%s/CS.data", directory);
+            snprintf(sn_path, sizeof(sn_path), "%s/SN.data", directory);
+        }
+
+        if (file_exists(cs_path) && file_exists(sn_path)) {
+            store->angle_cs = read_binary_floats(cs_path, 0, grid_size);
+            store->angle_sn = read_binary_floats(sn_path, 0, grid_size);
+            if (store->angle_cs && store->angle_sn) {
+                printf("MITgcm: loaded AngleCS/AngleSN for velocity rotation\n");
+            } else {
+                /* Both must succeed */
+                free(store->angle_cs); store->angle_cs = NULL;
+                free(store->angle_sn); store->angle_sn = NULL;
+            }
+        }
+    }
+
     /* Create USFile */
     USFile *f = calloc(1, sizeof(USFile));
-    if (!f) { free(store->depth_values); free(store->hfac); free(store); return NULL; }
+    if (!f) { free(store->depth_values); free(store->hfac);
+              free(store->angle_cs); free(store->angle_sn);
+              free(store); return NULL; }
 
     f->file_type = FILE_TYPE_MITGCM;
     strncpy(f->filename, directory, MAX_NAME_LEN - 1);
@@ -723,6 +756,34 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
         free(iterations);
     }
 
+    /* Detect velocity components and pair U/V variables */
+    if (store->angle_cs) {
+        /* Mark velocity components by name */
+        for (USVar *v = head; v; v = v->next) {
+            MitgcmVarData *d = (MitgcmVarData *)v->mitgcm_data;
+            if (v->name[0] == 'U') d->velocity_component = 1;
+            else if (v->name[0] == 'V') d->velocity_component = 2;
+        }
+
+        /* Pair U/V variables: same prefix, name differs only in first char */
+        for (USVar *u = head; u; u = u->next) {
+            MitgcmVarData *ud = (MitgcmVarData *)u->mitgcm_data;
+            if (ud->velocity_component != 1 || ud->paired_velocity) continue;
+
+            for (USVar *v = head; v; v = v->next) {
+                MitgcmVarData *vvd = (MitgcmVarData *)v->mitgcm_data;
+                if (vvd->velocity_component != 2 || vvd->paired_velocity) continue;
+                if (strcmp(ud->prefix, vvd->prefix) != 0) continue;
+                if (strcmp(u->name + 1, v->name + 1) != 0) continue;
+
+                ud->paired_velocity = v;
+                vvd->paired_velocity = u;
+                printf("MITgcm: paired %s / %s for rotation\n", u->name, v->name);
+                break;
+            }
+        }
+    }
+
     f->vars = head;
     f->n_vars = n_vars;
     printf("MITgcm: found %d variables from %d diagnostic groups\n", n_vars, n_prefixes);
@@ -780,6 +841,46 @@ int mitgcm_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data
     /* Byte swap */
     if (is_little_endian()) {
         swap_endian_float(data, slab_size);
+    }
+
+    /* Apply CS/SN velocity rotation */
+    if (store->angle_cs && vd->velocity_component != 0 && vd->paired_velocity) {
+        MitgcmVarData *pvd = (MitgcmVarData *)vd->paired_velocity->mitgcm_data;
+
+        /* Compute offset for the paired component in the same data file */
+        size_t p_field_size = pvd->is_3d ? (size_t)pvd->nz * slab_size : slab_size;
+        size_t p_offset = (size_t)pvd->field_index * p_field_size;
+        if (pvd->is_3d) p_offset += depth_idx * slab_size;
+        p_offset *= sizeof(float);
+
+        float *other = malloc(slab_size * sizeof(float));
+        if (other) {
+            FILE *fp2 = fopen(data_path, "rb");
+            if (fp2) {
+                fseek(fp2, (long)p_offset, SEEK_SET);
+                size_t pr = fread(other, sizeof(float), slab_size, fp2);
+                fclose(fp2);
+
+                if (pr == slab_size) {
+                    if (is_little_endian()) swap_endian_float(other, slab_size);
+
+                    if (vd->velocity_component == 1) {
+                        /* This is U, other is V: u_east = CS*U - SN*V */
+                        for (size_t i = 0; i < slab_size; i++) {
+                            float u = data[i], v = other[i];
+                            data[i] = store->angle_cs[i] * u - store->angle_sn[i] * v;
+                        }
+                    } else {
+                        /* This is V, other is U: v_north = SN*U + CS*V */
+                        for (size_t i = 0; i < slab_size; i++) {
+                            float u = other[i], v = data[i];
+                            data[i] = store->angle_sn[i] * u + store->angle_cs[i] * v;
+                        }
+                    }
+                }
+            }
+            free(other);
+        }
     }
 
     /* Apply hFacC land masking */
@@ -976,6 +1077,32 @@ int mitgcm_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
         if (fread(&val, sizeof(float), 1, fp) == 1) {
             if (is_little_endian()) swap_endian_float(&val, 1);
 
+            /* Apply CS/SN velocity rotation */
+            if (store->angle_cs && vd->velocity_component != 0 && vd->paired_velocity) {
+                MitgcmVarData *pvd = (MitgcmVarData *)vd->paired_velocity->mitgcm_data;
+                size_t p_field_size = pvd->is_3d ? (size_t)pvd->nz * slab_size : slab_size;
+                size_t p_off = (size_t)pvd->field_index * p_field_size;
+                if (pvd->is_3d) p_off += depth_idx * slab_size;
+                p_off += node_idx;
+                p_off *= sizeof(float);
+
+                float other_val;
+                fseek(fp, (long)p_off, SEEK_SET);
+                if (fread(&other_val, sizeof(float), 1, fp) == 1) {
+                    if (is_little_endian()) swap_endian_float(&other_val, 1);
+                    if (vd->velocity_component == 1) {
+                        /* U: u_east = CS*U - SN*V */
+                        val = store->angle_cs[node_idx] * val
+                            - store->angle_sn[node_idx] * other_val;
+                    } else {
+                        /* V: v_north = SN*U + CS*V */
+                        float u = other_val, v = val;
+                        val = store->angle_sn[node_idx] * u
+                            + store->angle_cs[node_idx] * v;
+                    }
+                }
+            }
+
             /* Check hFacC mask */
             int masked = 0;
             if (store->hfac && vd->is_3d) {
@@ -1014,6 +1141,8 @@ void mitgcm_close(USFile *file) {
         MitgcmStore *store = (MitgcmStore *)file->mitgcm_data;
         free(store->depth_values);
         free(store->hfac);
+        free(store->angle_cs);
+        free(store->angle_sn);
         free(store);
     }
 

@@ -402,7 +402,7 @@ The first visit to each new depth level builds a masked interpolation (timing de
   - Automatic land masking via hFacC grid file
   - Depth levels from RC grid file
   - Multi-timestep iteration discovery
-  - Note: velocity fields (UVEL/VVEL) are shown in local grid coordinates on LLC/cubed-sphere grids; geographic rotation requires AngleCS/AngleSN grid files (not yet implemented)
+  - Automatic velocity rotation on LLC/cubed-sphere grids: if AngleCS/AngleSN (or CS/SN) grid files are present, UVEL/VVEL and other paired velocity fields are rotated from local grid coordinates to geographic (eastward/northward) components
 - **Zarr**: v2 format (requires `make WITH_ZARR=1`)
   - Compression: LZ4, Blosc (with various inner codecs), or uncompressed
   - Data types: Float32, Float64, Int64

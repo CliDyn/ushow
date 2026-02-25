@@ -724,6 +724,245 @@ TEST(mitgcm_read_timeseries_land_point) {
     return 1;
 }
 
+/* ---- Velocity rotation helpers ---- */
+
+/* Create AngleCS.data + AngleSN.data with constant angle */
+static int create_angle_cs_sn(float cs_val, float sn_val) {
+    char path[512];
+    float cs[TEST_SLAB], sn[TEST_SLAB];
+
+    for (int i = 0; i < TEST_SLAB; i++) {
+        cs[i] = cs_val;
+        sn[i] = sn_val;
+    }
+
+    snprintf(path, sizeof(path), "%s/AngleCS.data", test_dir);
+    if (write_binary(path, cs, TEST_SLAB) != 0) return -1;
+
+    snprintf(path, sizeof(path), "%s/AngleSN.data", test_dir);
+    return write_binary(path, sn, TEST_SLAB);
+}
+
+/* Create a 3D velocity diagnostic with UVEL and VVEL fields */
+static int create_vel_diag(int iteration, float uval, float vval) {
+    char path[512];
+    char meta_buf[1024];
+
+    snprintf(path, sizeof(path), "%s/velDiag.%010d.meta", test_dir, iteration);
+    snprintf(meta_buf, sizeof(meta_buf),
+        " nDims = [   3 ];\n"
+        " dimList = [\n"
+        "    4,    1,    4,\n"
+        "    3,    1,    3,\n"
+        "    2,    1,    2\n"
+        " ];\n"
+        " dataprec = [ 'float32' ];\n"
+        " nrecords = [          2 ];\n"
+        " timeStepNumber = [ %d ];\n"
+        " nFlds = [    2 ];\n"
+        " fldList = {\n"
+        " 'UVEL    ' 'VVEL    '\n"
+        " };\n", iteration);
+    write_meta(path, meta_buf);
+
+    /* Data: 2 fields * nz * ny * nx */
+    size_t field_size = TEST_NZ * TEST_SLAB;
+    size_t total = 2 * field_size;
+    float *data = malloc(total * sizeof(float));
+    if (!data) return -1;
+
+    /* UVEL: constant value everywhere */
+    for (size_t i = 0; i < field_size; i++)
+        data[i] = uval;
+
+    /* VVEL: constant value everywhere */
+    for (size_t i = 0; i < field_size; i++)
+        data[field_size + i] = vval;
+
+    snprintf(path, sizeof(path), "%s/velDiag.%010d.data", test_dir, iteration);
+    int rc = write_binary(path, data, total);
+    free(data);
+    return rc;
+}
+
+/* Create dataset with angle files and velocity diagnostics */
+static int create_rotation_dataset(void) {
+    setup_test_dir();
+    if (create_grid_xy() != 0) return -1;
+    if (create_rc() != 0) return -1;
+    if (create_hfac() != 0) return -1;
+    /* CS=0.6, SN=0.8 (3-4-5 triangle, CS^2+SN^2=1) */
+    if (create_angle_cs_sn(0.6f, 0.8f) != 0) return -1;
+    /* UVEL=3.0, VVEL=4.0 */
+    if (create_vel_diag(100, 3.0f, 4.0f) != 0) return -1;
+    if (create_vel_diag(200, 6.0f, 8.0f) != 0) return -1;
+    return 0;
+}
+
+/* Velocity rotation tests */
+
+TEST(mitgcm_velocity_pairing) {
+    ASSERT_EQ(create_rotation_dataset(), 0);
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find UVEL and VVEL */
+    USVar *uvel = NULL, *vvel = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "UVEL") == 0) uvel = v;
+        if (strcmp(v->name, "VVEL") == 0) vvel = v;
+    }
+    ASSERT_NOT_NULL(uvel);
+    ASSERT_NOT_NULL(vvel);
+
+    /* Check they are paired */
+    ASSERT_NOT_NULL(uvel->mitgcm_data);
+    ASSERT_NOT_NULL(vvel->mitgcm_data);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+TEST(mitgcm_velocity_rotation_slice_u) {
+    ASSERT_EQ(create_rotation_dataset(), 0);
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *uvel = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "UVEL") == 0) { uvel = v; break; }
+    }
+    ASSERT_NOT_NULL(uvel);
+
+    float data[TEST_SLAB];
+    int rc = mitgcm_read_slice(uvel, 0, 0, data);
+    ASSERT_EQ_INT(rc, 0);
+
+    /* Point 0 is land → fill value */
+    ASSERT_NEAR(data[0], uvel->fill_value, 0.1);
+
+    /* Ocean points: u_east = CS*U - SN*V = 0.6*3.0 - 0.8*4.0 = 1.8 - 3.2 = -1.4 */
+    ASSERT_NEAR(data[1], -1.4f, 0.01);
+    ASSERT_NEAR(data[2], -1.4f, 0.01);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+TEST(mitgcm_velocity_rotation_slice_v) {
+    ASSERT_EQ(create_rotation_dataset(), 0);
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *vvel = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "VVEL") == 0) { vvel = v; break; }
+    }
+    ASSERT_NOT_NULL(vvel);
+
+    float data[TEST_SLAB];
+    int rc = mitgcm_read_slice(vvel, 0, 0, data);
+    ASSERT_EQ_INT(rc, 0);
+
+    /* Ocean points: v_north = SN*U + CS*V = 0.8*3.0 + 0.6*4.0 = 2.4 + 2.4 = 4.8 */
+    ASSERT_NEAR(data[1], 4.8f, 0.01);
+    ASSERT_NEAR(data[2], 4.8f, 0.01);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+TEST(mitgcm_velocity_rotation_timeseries) {
+    ASSERT_EQ(create_rotation_dataset(), 0);
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *uvel = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "UVEL") == 0) { uvel = v; break; }
+    }
+    ASSERT_NOT_NULL(uvel);
+
+    double *times = NULL;
+    float *values = NULL;
+    int *valid = NULL;
+    size_t n_out = 0;
+
+    /* Read timeseries at ocean point (index 1) */
+    int rc = mitgcm_read_timeseries(uvel, 1, 0, &times, &values, &valid, &n_out);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_EQ_SIZET(n_out, 2);
+    ASSERT_EQ_INT(valid[0], 1);
+    ASSERT_EQ_INT(valid[1], 1);
+
+    /* t=100: u_east = 0.6*3.0 - 0.8*4.0 = -1.4 */
+    ASSERT_NEAR(values[0], -1.4f, 0.01);
+    /* t=200: u_east = 0.6*6.0 - 0.8*8.0 = 3.6 - 6.4 = -2.8 */
+    ASSERT_NEAR(values[1], -2.8f, 0.01);
+
+    free(times); free(values); free(valid);
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+TEST(mitgcm_no_rotation_without_angles) {
+    /* Create dataset WITHOUT angle files */
+    setup_test_dir();
+    ASSERT_EQ(create_grid_xy(), 0);
+    ASSERT_EQ(create_rc(), 0);
+    ASSERT_EQ(create_hfac(), 0);
+    ASSERT_EQ(create_vel_diag(100, 3.0f, 4.0f), 0);
+
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *uvel = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "UVEL") == 0) { uvel = v; break; }
+    }
+    ASSERT_NOT_NULL(uvel);
+
+    float data[TEST_SLAB];
+    int rc = mitgcm_read_slice(uvel, 0, 0, data);
+    ASSERT_EQ_INT(rc, 0);
+
+    /* Without angles: raw UVEL=3.0 at ocean points (no rotation) */
+    ASSERT_NEAR(data[1], 3.0f, 0.01);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
 /* Close null */
 
 TEST(mitgcm_close_null) {
