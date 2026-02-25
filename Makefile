@@ -148,6 +148,32 @@ USHOW_LIBS += $(GRIB_LIBS)
 UTERM_LIBS += $(GRIB_LIBS)
 endif
 
+# YAC support (optional) - build with: make WITH_YAC=1
+# Requires: YAC library (https://dkrz-sw.gitlab-pages.dkrz.de/yac/) and MPI
+ifdef WITH_YAC
+YAC_PREFIX ?= $(HOME)/local/yac
+# Try pkg-config (check both system path and YAC_PREFIX)
+YAC_PKG_CFLAGS := $(shell PKG_CONFIG_PATH=$(YAC_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH pkg-config --cflags yac-core 2>/dev/null)
+YAC_PKG_LIBS := $(shell PKG_CONFIG_PATH=$(YAC_PREFIX)/lib/pkgconfig:$$PKG_CONFIG_PATH pkg-config --libs yac-core 2>/dev/null)
+
+ifneq ($(strip $(YAC_PKG_CFLAGS)$(YAC_PKG_LIBS)),)
+  YAC_CFLAGS := -DHAVE_YAC $(YAC_PKG_CFLAGS)
+  YAC_LIBS := $(YAC_PKG_LIBS)
+else
+  # Manual fallback: use YAC_PREFIX and mpicc
+  YAC_CFLAGS := -DHAVE_YAC -I$(YAC_PREFIX)/include
+  YAC_LIBS := -L$(YAC_PREFIX)/lib -lyac_core -lyac_clapack \
+              -Wl,-rpath,$(YAC_PREFIX)/lib
+endif
+
+# YAC requires MPI compiler
+CC = mpicc
+BASE_CFLAGS += $(YAC_CFLAGS)
+X11_FULL_CFLAGS += $(YAC_CFLAGS)
+USHOW_LIBS += $(YAC_LIBS)
+UTERM_LIBS += $(YAC_LIBS)
+endif
+
 # Directories
 SRCDIR = src
 OBJDIR = obj
@@ -182,6 +208,11 @@ endif
 # Add grib sources if enabled
 ifdef WITH_GRIB
 COMMON_SRCS += $(SRCDIR)/file_grib.c
+endif
+
+# Add yac sources if enabled
+ifdef WITH_YAC
+COMMON_SRCS += $(SRCDIR)/regrid_yac.c
 endif
 
 USHOW_OBJS = $(USHOW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
@@ -272,6 +303,12 @@ endif
 # GRIB dependencies (when WITH_GRIB is set)
 ifdef WITH_GRIB
 $(OBJDIR)/file_grib.o: $(SRCDIR)/file_grib.c $(SRCDIR)/file_grib.h $(SRCDIR)/ushow.defines.h
+endif
+
+# YAC dependencies (when WITH_YAC is set)
+ifdef WITH_YAC
+$(OBJDIR)/regrid_yac.o: $(SRCDIR)/regrid_yac.c $(SRCDIR)/regrid_yac.h \
+                         $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 endif
 
 # Print configuration

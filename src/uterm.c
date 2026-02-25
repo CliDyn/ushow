@@ -8,6 +8,9 @@
 #include "ushow.defines.h"
 #include "mesh.h"
 #include "regrid.h"
+#ifdef HAVE_YAC
+#include "regrid_yac.h"
+#endif
 #include "file_netcdf.h"
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
@@ -52,6 +55,9 @@ static USFileSet *zarr_fileset = NULL;
 #endif
 static USMesh *mesh = NULL;
 static USRegrid *regrid = NULL;
+#ifdef HAVE_YAC
+static USYacRegrid *yac_regrid_ptr = NULL;
+#endif
 static USView *view = NULL;
 static USVar *variables = NULL;
 static USVar *current_var = NULL;
@@ -70,6 +76,9 @@ typedef struct {
     int render_mode;     /* TERM_RENDER_* */
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
+#ifdef HAVE_YAC
+    int yac_method;
+#endif
 } UTermOptions;
 
 static UTermOptions options = {
@@ -79,7 +88,10 @@ static UTermOptions options = {
     .color_mode = -1,
     .render_mode = TERM_RENDER_ASCII,
     .mesh_file = "",
-    .glyph_ramp = DEFAULT_GLYPH_RAMP
+    .glyph_ramp = DEFAULT_GLYPH_RAMP,
+#ifdef HAVE_YAC
+    .yac_method = -1,
+#endif
 };
 
 /* Terminal mode */
@@ -226,6 +238,12 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "      --render <mode>    Render mode: ascii | half | braille\n");
     fprintf(stderr, "      --color            Force ANSI color output\n");
     fprintf(stderr, "      --no-color         Disable ANSI colors\n");
+#ifdef HAVE_YAC
+    fprintf(stderr, "      --yac-method <m>   Use YAC interpolation method:\n");
+    fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
+    fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
+    fprintf(stderr, "                         conserv1, conserv2\n");
+#endif
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
     fprintf(stderr, "Keys:\n");
@@ -254,7 +272,12 @@ static int collect_variables(USVar *head) {
 }
 
 static int set_variable_index(int idx) {
-    if (!view || !mesh || !regrid || !var_array) return -1;
+    if (!view || !mesh || !var_array) return -1;
+    if (!regrid
+#ifdef HAVE_YAC
+        && !yac_regrid_ptr
+#endif
+    ) return -1;
     if (idx < 0 || idx >= n_variables) return -1;
 
     current_var_index = idx;
@@ -851,6 +874,13 @@ static void cleanup_all(void) {
     view_free(view);
     view = NULL;
 
+#ifdef HAVE_YAC
+    if (yac_regrid_ptr) {
+        yac_regrid_free(yac_regrid_ptr);
+        yac_regrid_ptr = NULL;
+        yac_regrid_finalize();
+    }
+#endif
     regrid_free(regrid);
     regrid = NULL;
 
@@ -897,6 +927,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"render", required_argument, 0, 1003},
         {"color", no_argument, 0, 1001},
         {"no-color", no_argument, 0, 1002},
+#ifdef HAVE_YAC
+        {"yac-method", required_argument, 0, 1100},
+#endif
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -940,6 +973,19 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
             case 1002:
                 options.color_mode = 0;
                 break;
+#ifdef HAVE_YAC
+            case 1100: {
+                USYacMethod ym;
+                if (yac_method_parse(optarg, &ym) != 0) {
+                    fprintf(stderr, "Unknown YAC method: %s\n", optarg);
+                    fprintf(stderr, "Available: nnn1, nnn4dist, nnn4gauss, "
+                            "avg_arith, avg_dist, avg_bary, conserv1, conserv2\n");
+                    return -1;
+                }
+                options.yac_method = (int)ym;
+                break;
+            }
+#endif
             default:
                 print_usage(argv[0]);
                 return -1;
@@ -994,11 +1040,30 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
-    if (!regrid) {
-        fprintf(stderr, "Failed to create regrid structure\n");
-        cleanup_all();
-        return 1;
+#ifdef HAVE_YAC
+    if (options.yac_method >= 0) {
+        if (yac_regrid_init() != 0) {
+            fprintf(stderr, "Failed to initialize YAC\n");
+            cleanup_all();
+            return 1;
+        }
+        yac_regrid_ptr = yac_regrid_create(
+            mesh, options.target_resolution, (USYacMethod)options.yac_method);
+        if (!yac_regrid_ptr) {
+            fprintf(stderr, "Failed to create YAC regrid structure\n");
+            yac_regrid_finalize();
+            cleanup_all();
+            return 1;
+        }
+    } else
+#endif
+    {
+        regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
+        if (!regrid) {
+            fprintf(stderr, "Failed to create regrid structure\n");
+            cleanup_all();
+            return 1;
+        }
     }
 
 #ifdef HAVE_ZARR
@@ -1041,6 +1106,12 @@ int main(int argc, char *argv[]) {
     if (fileset) view_set_fileset(view, fileset);
 #ifdef HAVE_ZARR
     if (zarr_fileset) view_set_fileset(view, zarr_fileset);
+#endif
+
+#ifdef HAVE_YAC
+    if (yac_regrid_ptr) {
+        view_set_yac_regrid(view, yac_regrid_ptr);
+    }
 #endif
 
     if (set_variable_index(0) != 0) {

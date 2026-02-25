@@ -205,6 +205,9 @@ struct USView {
     USVar      *variable;           /* Current variable being displayed */
     USMesh     *mesh;               /* Current mesh/coordinates */
     USRegrid   *regrid;             /* Current regridding setup */
+#ifdef HAVE_YAC
+    void       *yac_regrid;        /* USYacRegrid* when using YAC interpolation */
+#endif
     USFileSet  *fileset;            /* Multi-file set (NULL for single file) */
 
     /* Render mode */
@@ -247,6 +250,9 @@ typedef struct {
     char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
     int         frame_delay_ms;     /* Animation speed */
     int         polygon_only;       /* Skip regridding, polygon mode only */
+#ifdef HAVE_YAC
+    int         yac_method;        /* YAC interpolation method (-1 = disabled) */
+#endif
 } USOptions;
 
 /* Dimension info for display */

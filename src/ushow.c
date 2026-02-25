@@ -7,6 +7,9 @@
 #include "ushow.defines.h"
 #include "mesh.h"
 #include "regrid.h"
+#ifdef HAVE_YAC
+#include "regrid_yac.h"
+#endif
 #include "file_netcdf.h"
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
@@ -32,6 +35,9 @@ static USFileSet *zarr_fileset = NULL;  /* Multi-file zarr set */
 #endif
 static USMesh *mesh = NULL;
 static USRegrid *regrid = NULL;
+#ifdef HAVE_YAC
+static USYacRegrid *yac_regrid_ptr = NULL;
+#endif
 static USView *view = NULL;
 static USVar *variables = NULL;
 static USVar *current_var = NULL;
@@ -45,7 +51,10 @@ static USOptions options = {
     .debug = 0,
     .influence_radius = DEFAULT_INFLUENCE_RADIUS_M,
     .target_resolution = DEFAULT_RESOLUTION,
-    .frame_delay_ms = 200
+    .frame_delay_ms = 200,
+#ifdef HAVE_YAC
+    .yac_method = -1,
+#endif
 };
 
 /* Forward declarations */
@@ -761,6 +770,12 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay (default: 200)\n");
     fprintf(stderr, "  -p, --polygon-only     Skip regridding, use polygon mode only (faster)\n");
+#ifdef HAVE_YAC
+    fprintf(stderr, "      --yac-method <m>   Use YAC interpolation method:\n");
+    fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
+    fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
+    fprintf(stderr, "                         conserv1, conserv2\n");
+#endif
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
@@ -781,6 +796,9 @@ int main(int argc, char *argv[]) {
         {"influence",    required_argument, 0, 'i'},
         {"delay",        required_argument, 0, 'd'},
         {"polygon-only", no_argument,       0, 'p'},
+#ifdef HAVE_YAC
+        {"yac-method",   required_argument, 0, 1100},
+#endif
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -804,6 +822,19 @@ int main(int argc, char *argv[]) {
             case 'p':
                 options.polygon_only = 1;
                 break;
+#ifdef HAVE_YAC
+            case 1100: {
+                USYacMethod ym;
+                if (yac_method_parse(optarg, &ym) != 0) {
+                    fprintf(stderr, "Unknown YAC method: %s\n", optarg);
+                    fprintf(stderr, "Available: nnn1, nnn4dist, nnn4gauss, "
+                            "avg_arith, avg_dist, avg_bary, conserv1, conserv2\n");
+                    return 1;
+                }
+                options.yac_method = (int)ym;
+                break;
+            }
+#endif
             case 'h':
             default:
                 print_usage(argv[0]);
@@ -1043,13 +1074,33 @@ int main(int argc, char *argv[]) {
 
     /* Create regridding structure (skip if polygon-only mode) */
     if (!options.polygon_only) {
-        printf("Creating regrid structure...\n");
-        regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
-        if (!regrid) {
-            fprintf(stderr, "Failed to create regrid\n");
-            mesh_free(mesh);
-            netcdf_close(file);
-            return 1;
+#ifdef HAVE_YAC
+        if (options.yac_method >= 0) {
+            printf("Creating YAC regrid structure...\n");
+            if (yac_regrid_init() != 0) {
+                fprintf(stderr, "Failed to initialize YAC\n");
+                mesh_free(mesh);
+                return 1;
+            }
+            yac_regrid_ptr = yac_regrid_create(
+                mesh, options.target_resolution, (USYacMethod)options.yac_method);
+            if (!yac_regrid_ptr) {
+                fprintf(stderr, "Failed to create YAC regrid\n");
+                yac_regrid_finalize();
+                mesh_free(mesh);
+                return 1;
+            }
+        } else
+#endif
+        {
+            printf("Creating regrid structure...\n");
+            regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
+            if (!regrid) {
+                fprintf(stderr, "Failed to create regrid\n");
+                mesh_free(mesh);
+                netcdf_close(file);
+                return 1;
+            }
         }
     } else {
         printf("Polygon-only mode: skipping regrid\n");
@@ -1258,6 +1309,13 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    /* Set YAC regrid on view if using YAC */
+#ifdef HAVE_YAC
+    if (yac_regrid_ptr) {
+        view_set_yac_regrid(view, yac_regrid_ptr);
+    }
+#endif
+
     /* Set polygon-only mode if requested */
     if (options.polygon_only) {
         view->render_mode = RENDER_MODE_POLYGON;
@@ -1293,6 +1351,13 @@ int main(int argc, char *argv[]) {
         }
     }
     view_free(view);
+#ifdef HAVE_YAC
+    if (yac_regrid_ptr) {
+        yac_regrid_free(yac_regrid_ptr);
+        yac_regrid_ptr = NULL;
+        yac_regrid_finalize();
+    }
+#endif
     regrid_free(regrid);
     mesh_free(mesh);
 #ifdef HAVE_GRIB

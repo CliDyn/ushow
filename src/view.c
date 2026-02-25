@@ -11,6 +11,9 @@
 #include "file_grib.h"
 #endif
 #include "regrid.h"
+#ifdef HAVE_YAC
+#include "regrid_yac.h"
+#endif
 #include "colormaps.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -36,8 +39,12 @@ void view_set_fileset(USView *view, USFileSet *fileset) {
 
 int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) {
     if (!view || !var || !mesh) return -1;
-    /* regrid can be NULL in polygon-only mode */
-    if (!regrid && view->render_mode != RENDER_MODE_POLYGON) return -1;
+    /* regrid can be NULL in polygon-only mode or when using YAC */
+    if (!regrid && view->render_mode != RENDER_MODE_POLYGON
+#ifdef HAVE_YAC
+        && !view->yac_regrid
+#endif
+    ) return -1;
 
     view->variable = var;
     view->mesh = mesh;
@@ -67,6 +74,11 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
 
     /* Get target grid dimensions */
     size_t nx, ny;
+#ifdef HAVE_YAC
+    if (view->yac_regrid) {
+        yac_regrid_get_target_dims(view->yac_regrid, &nx, &ny);
+    } else
+#endif
     if (regrid) {
         regrid_get_target_dims(regrid, &nx, &ny);
     } else {
@@ -91,7 +103,11 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     view->raw_data_size = n_points;
 
     free(view->regridded_data);
-    if (regrid) {
+    if (regrid
+#ifdef HAVE_YAC
+        || view->yac_regrid
+#endif
+    ) {
         view->regridded_data = malloc(n_data * sizeof(float));
     } else {
         view->regridded_data = NULL;  /* Not needed in polygon-only mode */
@@ -104,7 +120,11 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
         fprintf(stderr, "Failed to allocate view buffers\n");
         return -1;
     }
-    if (regrid && !view->regridded_data) {
+    if ((regrid
+#ifdef HAVE_YAC
+         || view->yac_regrid
+#endif
+        ) && !view->regridded_data) {
         fprintf(stderr, "Failed to allocate regridded data buffer\n");
         return -1;
     }
@@ -398,7 +418,11 @@ int view_update(USView *view) {
     if (!view || !view->variable || !view->mesh) return -1;
     
     /* Polygon mode doesn't need regrid */
-    if (view->render_mode != RENDER_MODE_POLYGON && !view->regrid) return -1;
+    if (view->render_mode != RENDER_MODE_POLYGON && !view->regrid
+#ifdef HAVE_YAC
+        && !view->yac_regrid
+#endif
+    ) return -1;
 
     /* Read data slice - dispatch based on file type */
     int read_result;
@@ -452,8 +476,16 @@ int view_update(USView *view) {
     }
     
     /* Interpolate mode: regrid and colormap */
-    regrid_apply(view->regrid, view->raw_data,
-                 view->variable->fill_value, view->regridded_data);
+#ifdef HAVE_YAC
+    if (view->yac_regrid) {
+        yac_regrid_apply(view->yac_regrid, view->raw_data,
+                         view->variable->fill_value, view->regridded_data);
+    } else
+#endif
+    {
+        regrid_apply(view->regrid, view->raw_data,
+                     view->variable->fill_value, view->regridded_data);
+    }
 
     /* Convert to pixels with scaling */
     USColormap *cmap = colormap_get_current();
@@ -484,6 +516,12 @@ void view_free(USView *view) {
     free(view->pixels);
     free(view);
 }
+
+#ifdef HAVE_YAC
+void view_set_yac_regrid(USView *view, void *yac_regrid) {
+    if (view) view->yac_regrid = yac_regrid;
+}
+#endif
 
 int view_save_ppm(USView *view, const char *filename) {
     if (!view || !view->pixels || !filename) return -1;

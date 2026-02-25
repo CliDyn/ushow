@@ -83,4 +83,12 @@ void view_free(USView *view);
  */
 int view_save_ppm(USView *view, const char *filename);
 
+#ifdef HAVE_YAC
+/*
+ * Set YAC regrid on the view (alternative to the KDTree regrid).
+ * Pass NULL to clear.
+ */
+void view_set_yac_regrid(USView *view, void *yac_regrid);
+#endif
+
 #endif /* VIEW_H */
