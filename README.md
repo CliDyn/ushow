@@ -325,7 +325,7 @@ The test suite includes:
   - Blue data line with dots at data points; gaps shown for fill/missing values
   - Works with both single files and multi-file datasets
   - When files have different time epochs, values are automatically normalized to a common reference
-- **YAC method button** (when `--yac-method` is used): Click to cycle through interpolation methods: `avg_arith` -> `avg_dist` -> `avg_bary` -> `nnn1` -> `nnn4dist` -> `nnn4gauss`
+- **Render mode / YAC method button**: Normally toggles Interp/Polygon mode. When YAC is active (`--yac-method`), cycles through interpolation methods instead: `avg_arith` -> `avg_dist` -> `avg_bary` -> `nnn1` -> `nnn4dist` -> `nnn4gauss`
 - **Dimension panel**: Shows dimension names, ranges, current values
 - **Colorbar**: Min/max and intermediate labels update as you adjust range
 

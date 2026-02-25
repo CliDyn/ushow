@@ -522,7 +522,7 @@ static void on_yac_method_cycle(void) {
             mesh, options.target_resolution, YAC_METHOD_AVERAGE_ARITH);
     }
     view_set_yac_regrid(view, yac_regrid_ptr);
-    x_update_yac_method_label(yac_method_name(
+    x_update_render_mode_label(yac_method_name(
         yac_regrid_get_method(yac_regrid_ptr)));
     update_display();
 }
@@ -1346,13 +1346,13 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    /* Set YAC regrid on view if using YAC */
+    /* Set YAC regrid on view if using YAC — reuse render mode button for method cycling */
 #ifdef HAVE_YAC
     if (yac_regrid_ptr) {
         view_set_yac_regrid(view, yac_regrid_ptr);
-        x_setup_yac_method_button(yac_method_name(
+        x_set_render_mode_callback(on_yac_method_cycle);
+        x_update_render_mode_label(yac_method_name(
             yac_regrid_get_method(yac_regrid_ptr)));
-        x_set_yac_method_callback(on_yac_method_cycle);
     }
 #endif
 
