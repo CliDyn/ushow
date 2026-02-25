@@ -216,6 +216,7 @@ Options (uterm):
   --render <mode>    Render mode: ascii | half | braille
   --color            Force ANSI color output
   --no-color         Disable ANSI color output
+  --yac              Use YAC interpolation (default: avg_arith)
   --yac-method <m>   Use YAC interpolation method (requires WITH_YAC=1)
   --yac-3d           Per-depth masked interpolation for 3D variables
   -h, --help             Show help

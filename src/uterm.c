@@ -241,6 +241,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "      --color            Force ANSI color output\n");
     fprintf(stderr, "      --no-color         Disable ANSI colors\n");
 #ifdef HAVE_YAC
+    fprintf(stderr, "      --yac              Use YAC interpolation (default: avg_arith)\n");
     fprintf(stderr, "      --yac-method <m>   Use YAC interpolation method:\n");
     fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
     fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
@@ -931,6 +932,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"color", no_argument, 0, 1001},
         {"no-color", no_argument, 0, 1002},
 #ifdef HAVE_YAC
+        {"yac",          no_argument,       0, 1099},
         {"yac-method", required_argument, 0, 1100},
         {"yac-3d", no_argument, 0, 1101},
 #endif
@@ -978,6 +980,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.color_mode = 0;
                 break;
 #ifdef HAVE_YAC
+            case 1099:
+                options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
+                break;
             case 1100: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {
