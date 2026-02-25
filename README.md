@@ -199,6 +199,7 @@ Options:
   --yac                  Use YAC interpolation with default method (avg_arith)
   --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
+  --yac-3d               Per-depth masked interpolation for 3D variables
   -h, --help             Show help message
 ```
 
@@ -215,6 +216,8 @@ Options (uterm):
   --render <mode>    Render mode: ascii | half | braille
   --color            Force ANSI color output
   --no-color         Disable ANSI color output
+  --yac-method <m>   Use YAC interpolation method (requires WITH_YAC=1)
+  --yac-3d           Per-depth masked interpolation for 3D variables
   -h, --help             Show help
 ```
 
@@ -266,6 +269,8 @@ YAC interpolation (requires `make WITH_YAC=1`):
 ./ushow temp.nc -m mesh.nc --yac-method nnn4dist    # 4-NN distance-weighted
 ./ushow temp.nc -m mesh.nc --yac-method nnn4gauss   # 4-NN Gaussian-weighted
 ./ushow temp.nc -m mesh.nc --yac-method avg_arith   # Cell averaging
+./ushow temp.nc -m mesh.nc --yac-3d                 # Per-depth masking for 3D ocean data
+./ushow temp.nc -m mesh.nc --yac-3d --yac-method nnn4dist  # Combine with specific method
 ```
 
 Zarr store with consolidated metadata (faster loading):
@@ -304,6 +309,7 @@ The test suite includes:
 - **test_timeseries**: Time series reading, multi-file concatenation, and CF time unit conversion
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
+- **test_yac_3d**: Per-depth masked YAC interpolation (when built with `WITH_YAC=1`)
 - **test_integration**: End-to-end workflow tests
 
 
@@ -361,6 +367,14 @@ By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured
 | `avg_bary` | Cell averaging, barycentric |
 
 NNN methods work with any grid type. Averaging methods require element connectivity — for grids that lack it (reduced Gaussian, HEALPix, etc.), ushow auto-generates a triangulation from latitude bands.
+
+### Per-Depth Masking (`--yac-3d`)
+
+For 3D ocean variables (e.g., temperature at 50 depth levels), deeper levels have more land masking — fewer valid source points. Without `--yac-3d`, a single interpolation is used for all depths, so fill values from land points can bleed into the result at deeper levels.
+
+With `--yac-3d`, ushow builds a separate masked interpolation for each depth level lazily (on first visit). Each level only uses valid (non-fill) source points, producing clean coastlines at all depths. Surface levels that have no masking reuse the base interpolation with no overhead.
+
+The first visit to each new depth level builds a masked interpolation (timing depends on grid size); subsequent visits are instant (cached). The cache is cleared automatically when you switch variables or cycle interpolation methods.
 
 ## Data Flow
 
