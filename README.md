@@ -337,6 +337,7 @@ The test suite includes:
 - **test_file_mitgcm**: MITgcm MDS binary file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
 - **test_yac_3d**: Per-depth masked YAC interpolation (when built with `WITH_YAC=1`)
+- **test_yac_click**: Time series click-to-node lookup in YAC mode (when built with `WITH_YAC=1`)
 - **test_integration**: End-to-end workflow tests
 
 
@@ -359,6 +360,7 @@ The test suite includes:
   - Y-axis with numeric tick labels, X-axis with CF time date formatting (when detected)
   - Blue data line with dots at data points; gaps shown for fill/missing values
   - Works with both single files and multi-file datasets
+  - Works in both KDTree and YAC interpolation modes (`--yac`, `--yac-3d`)
   - When files have different time epochs, values are automatically normalized to a common reference
 - **Render mode / YAC method button**: Normally toggles Interp/Polygon mode. When YAC is active (`--yac-method`), cycles through interpolation methods instead: `avg_arith` -> `avg_dist` -> `avg_bary` -> `nnn1` -> `nnn4dist` -> `nnn4gauss`
 - **Dimension panel**: Shows dimension names, ranges, current values

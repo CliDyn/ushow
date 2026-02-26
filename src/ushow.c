@@ -18,6 +18,7 @@
 #ifdef HAVE_GRIB
 #include "file_grib.h"
 #endif
+#include "kdtree.h"
 #include "colormaps.h"
 #include "view.h"
 #include "interface/x_interface.h"
@@ -25,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <getopt.h>
 #include <glob.h>
 
@@ -267,8 +269,18 @@ static void on_mouse_motion(int px, int py) {
     x_update_value_label(lon, lat, value);
 }
 
+static KDTree *click_kdtree = NULL;  /* lazy-built for YAC mode */
+
 static void on_mouse_click(int px, int py) {
-    if (!view || !view->regrid || !view->regridded_data || !current_var) return;
+    if (!view || !view->regridded_data || !current_var) return;
+
+    int have_regrid = (view->regrid != NULL);
+#ifdef HAVE_YAC
+    int have_yac = (view->yac_regrid != NULL);
+#else
+    int have_yac = 0;
+#endif
+    if (!have_regrid && !have_yac) return;
 
     /* Polygon-only mode: no regrid → no pixel-to-node mapping */
     if (view->render_mode == RENDER_MODE_POLYGON) {
@@ -292,16 +304,37 @@ static void on_mouse_click(int px, int py) {
     /* Flip Y for display */
     size_t src_y = view->data_ny - 1 - data_y;
 
-    /* Check valid mask */
     size_t grid_idx = src_y * view->data_nx + data_x;
-    if (!view->regrid->valid_mask[grid_idx]) return;
-
-    /* Get source mesh node index from nn_indices */
-    size_t node_idx = view->regrid->nn_indices[grid_idx];
-
-    /* Get lon/lat for display */
     double lon, lat;
-    regrid_get_lonlat(view->regrid, data_x, src_y, &lon, &lat);
+    size_t node_idx;
+
+    if (have_regrid) {
+        /* KDTree regrid mode: use precomputed valid_mask and nn_indices */
+        if (!view->regrid->valid_mask[grid_idx]) return;
+        node_idx = view->regrid->nn_indices[grid_idx];
+        regrid_get_lonlat(view->regrid, data_x, src_y, &lon, &lat);
+    } else {
+#ifdef HAVE_YAC
+        /* YAC mode: check validity from regridded data, find nearest source node */
+        float val = view->regridded_data[grid_idx];
+        if (val == current_var->fill_value || fabsf(val) >= INVALID_DATA_THRESHOLD) return;
+
+        yac_regrid_get_lonlat(view->yac_regrid, data_x, src_y, &lon, &lat);
+
+        /* Lazy-build KDTree from mesh for nearest-node lookup */
+        if (!click_kdtree && mesh && mesh->xyz) {
+            click_kdtree = kdtree_create(mesh->xyz, mesh->n_points);
+        }
+        if (!click_kdtree) return;
+
+        double query[3];
+        double nn_dist;
+        lonlat_to_cartesian(lon, lat, &query[0], &query[1], &query[2]);
+        kdtree_query_nearest(click_kdtree, query, &node_idx, &nn_dist);
+#else
+        return;
+#endif
+    }
 
     printf("Extracting time series at lon=%.2f, lat=%.2f (node %zu)...\n", lon, lat, node_idx);
 
@@ -1456,6 +1489,8 @@ int main(int argc, char *argv[]) {
         yac_regrid_finalize();
     }
 #endif
+    kdtree_free(click_kdtree);
+    click_kdtree = NULL;
     regrid_free(regrid);
     mesh_free(mesh);
 #ifdef HAVE_GRIB

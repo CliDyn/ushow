@@ -101,7 +101,7 @@ endif
 
 # Add yac tests if enabled
 ifdef WITH_YAC
-TEST_TARGETS += test_yac_3d test_yac_curve2d
+TEST_TARGETS += test_yac_3d test_yac_curve2d test_yac_click
 endif
 
 # Object files needed from main project
@@ -182,6 +182,9 @@ test_yac_3d: test_yac_3d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTRE
 test_yac_curve2d: test_yac_curve2d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
+test_yac_click: test_yac_click.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
 # Run all tests
 test: run-tests
 
@@ -253,9 +256,12 @@ test-yac-3d: test_yac_3d
 test-yac-curve2d: test_yac_curve2d
 	./test_yac_curve2d
 
+test-yac-click: test_yac_click
+	./test_yac_click
+
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d
+	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d test_yac_click
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 	rm -rf /tmp/test_mitgcm_*
