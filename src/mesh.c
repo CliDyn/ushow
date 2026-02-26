@@ -210,14 +210,17 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     size_t orig_nx = 0, orig_ny = 0;
 
     /* Check dimension names to distinguish structured from unstructured */
-    int lon_dim_id, lat_dim_id;
+    int lon_dimids[NC_MAX_VAR_DIMS], lat_dimids[NC_MAX_VAR_DIMS];
+    int lon_dim_id = -1, lat_dim_id = -1;
     char lon_dimname[MAX_NAME_LEN] = "", lat_dimname[MAX_NAME_LEN] = "";
     if (lon_info.ndims >= 1) {
-        nc_inq_vardimid(mesh_ncid, lon_info.varid, &lon_dim_id);
+        nc_inq_vardimid(mesh_ncid, lon_info.varid, lon_dimids);
+        lon_dim_id = lon_dimids[0];
         nc_inq_dimname(mesh_ncid, lon_dim_id, lon_dimname);
     }
     if (lat_info.ndims >= 1) {
-        nc_inq_vardimid(mesh_ncid, lat_info.varid, &lat_dim_id);
+        nc_inq_vardimid(mesh_ncid, lat_info.varid, lat_dimids);
+        lat_dim_id = lat_dimids[0];
         nc_inq_dimname(mesh_ncid, lat_dim_id, lat_dimname);
     }
 
@@ -356,16 +359,6 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     if (mesh_filename && mesh_filename[0]) {
         mesh->mesh_filename = strdup(mesh_filename);
         mesh->mesh_loaded = 1;
-        
-        /* Try to load element connectivity for polygon rendering */
-        int mesh_ncid_conn;
-        if (nc_open(mesh_filename, NC_NOWRITE, &mesh_ncid_conn) == NC_NOERR) {
-            load_element_connectivity(mesh, mesh_ncid_conn);
-            nc_close(mesh_ncid_conn);
-        }
-    } else {
-        /* Try to load connectivity from data file */
-        load_element_connectivity(mesh, data_ncid);
     }
 
     return mesh;
@@ -869,6 +862,21 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
 
     printf("Loaded %zu triangular elements for polygon rendering\n", n_elements);
     return 0;
+}
+
+int mesh_load_connectivity(USMesh *mesh, const char *mesh_filename) {
+    if (!mesh) return -1;
+
+    int ncid;
+    const char *filename = (mesh_filename && mesh_filename[0])
+                           ? mesh_filename : mesh->mesh_filename;
+    if (!filename || !filename[0]) return -1;
+
+    if (nc_open(filename, NC_NOWRITE, &ncid) != NC_NOERR) return -1;
+
+    int result = load_element_connectivity(mesh, ncid);
+    nc_close(ncid);
+    return result;
 }
 
 void mesh_free(USMesh *mesh) {

@@ -378,6 +378,9 @@ TEST(mpas_connectivity_loads) {
     ASSERT_NOT_NULL(mesh);
     nc_close(ncid);
 
+    /* Connectivity not loaded automatically; load on demand */
+    mesh_load_connectivity(mesh, filename);
+
     /* Should have loaded MPAS connectivity */
     ASSERT_GT(mesh->n_elements, 0);
     ASSERT_EQ_INT(mesh->n_vertices, 3);
@@ -419,6 +422,9 @@ TEST(mpas_connectivity_all_boundary) {
     ASSERT_NOT_NULL(mesh);
     nc_close(ncid);
 
+    /* Load connectivity on demand */
+    mesh_load_connectivity(mesh, filename);
+
     /* All vertices are boundary -> all triangles skipped */
     ASSERT_EQ_SIZET(mesh->n_elements, 0);
 
@@ -442,10 +448,91 @@ TEST(mpas_connectivity_no_boundary) {
     ASSERT_NOT_NULL(mesh);
     nc_close(ncid);
 
+    /* Load connectivity on demand */
+    mesh_load_connectivity(mesh, filename);
+
     /* No boundary -> all triangles kept */
     ASSERT_EQ_SIZET(mesh->n_elements, (size_t)n_vertices);
     ASSERT_EQ_INT(mesh->n_vertices, 3);
 
+    mesh_free(mesh);
+    cleanup_test_file(filename);
+    return 1;
+}
+
+/* Test mesh_create_from_netcdf with 2D curvilinear coords reads correctly */
+TEST(mesh_from_netcdf_2d_curvilinear_reads_coords) {
+    const char *filename = create_test_netcdf_2d_curvilinear(10, 8);
+    ASSERT_NOT_NULL(filename);
+
+    int ncid;
+    int status = nc_open(filename, NC_NOWRITE, &ncid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    USMesh *mesh = mesh_create_from_netcdf(ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+
+    /* Should have 10*8 = 80 points */
+    ASSERT_EQ_SIZET(mesh->n_points, 80);
+    ASSERT_EQ(mesh->coord_type, COORD_TYPE_2D_CURVILINEAR);
+    ASSERT_EQ_SIZET(mesh->orig_nx, 10);
+    ASSERT_EQ_SIZET(mesh->orig_ny, 8);
+
+    /* Coordinates should be valid (not garbage from uninitialized memory) */
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        ASSERT_GE(mesh->lon[i], -200.0);
+        ASSERT_LE(mesh->lon[i], 200.0);
+        ASSERT_GE(mesh->lat[i], -91.0);
+        ASSERT_LE(mesh->lat[i], 91.0);
+    }
+
+    /* XYZ should be on unit sphere */
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        double x = mesh->xyz[i * 3 + 0];
+        double y = mesh->xyz[i * 3 + 1];
+        double z = mesh->xyz[i * 3 + 2];
+        double r = sqrt(x*x + y*y + z*z);
+        ASSERT_NEAR(r, 1.0, EPSILON);
+    }
+
+    /* Verify ncid is still valid after mesh loading (regression: nc_inq_vardimid overflow) */
+    int nvars;
+    status = nc_inq_nvars(ncid, &nvars);
+    ASSERT_EQ_INT(status, NC_NOERR);
+    ASSERT_GT(nvars, 0);
+
+    nc_close(ncid);
+    mesh_free(mesh);
+    cleanup_test_file(filename);
+    return 1;
+}
+
+/* Test mesh_create_from_netcdf preserves ncid for subsequent reads */
+TEST(mesh_from_netcdf_ncid_not_corrupted) {
+    const char *filename = create_test_netcdf_2d_curvilinear(20, 15);
+    ASSERT_NOT_NULL(filename);
+
+    int ncid;
+    int status = nc_open(filename, NC_NOWRITE, &ncid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    /* Read a variable BEFORE mesh creation */
+    int varid;
+    status = nc_inq_varid(ncid, "lon", &varid);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    USMesh *mesh = mesh_create_from_netcdf(ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+
+    /* The ncid must still be valid AFTER mesh creation (the bug was that
+       nc_inq_vardimid with a too-small buffer corrupted the ncid on stack) */
+    double val;
+    size_t start[] = {0, 0};
+    size_t count[] = {1, 1};
+    status = nc_get_vara_double(ncid, varid, start, count, &val);
+    ASSERT_EQ_INT(status, NC_NOERR);
+
+    nc_close(ncid);
     mesh_free(mesh);
     cleanup_test_file(filename);
     return 1;

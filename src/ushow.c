@@ -1185,6 +1185,10 @@ int main(int argc, char *argv[]) {
         }
     } else {
         printf("Polygon-only mode: skipping regrid\n");
+        /* Load connectivity on demand for polygon rendering */
+        if (mesh->n_elements == 0 || mesh->elem_nodes == NULL) {
+            mesh_load_connectivity(mesh, mesh_filename);
+        }
         if (mesh->n_elements == 0 || mesh->elem_nodes == NULL) {
             fprintf(stderr, "Error: --polygon-only requires mesh with element connectivity\n");
             fprintf(stderr, "Use -m <mesh.nc> to specify a mesh file with face_nodes\n");
