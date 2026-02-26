@@ -98,13 +98,26 @@ make uterm            # Build terminal viewer only
 On Levante, the Makefile automatically uses the DKRZ spack-installed libraries:
 - NetCDF-C from `/sw/spack-levante/netcdf-c-4.8.1-qk24yp`
 - X11 libraries from `/sw/spack-levante/libx*`
+- c-blosc and lz4 for Zarr support
+- eccodes for GRIB support
 
-No modules need to be loaded. Simply run:
+For basic builds (without YAC), no modules need to be loaded:
 ```bash
 make                  # Without zarr/grib support
 make WITH_ZARR=1      # With zarr support (uses system blosc/lz4)
 make WITH_GRIB=1      # With grib support (uses system eccodes)
+```
+
+For YAC support, load the OpenMPI module (provides `mpicc`) and build YAXT/YAC first (see [YAC Interpolation](#yac-interpolation)):
+```bash
+module load openmpi/4.1.2-gcc-11.2.0
 make WITH_YAC=1       # With YAC interpolation support
+```
+
+Full build with all optional features:
+```bash
+module load openmpi/4.1.2-gcc-11.2.0
+make WITH_GRIB=1 WITH_YAC=1 WITH_ZARR=1
 ```
 
 The binary will have the library paths embedded (via rpath), so it runs without setting `LD_LIBRARY_PATH`.
@@ -112,6 +125,11 @@ The binary will have the library paths embedded (via rpath), so it runs without 
 ### YAC Interpolation
 
 YAC (Yet Another Coupler) provides professional-grade interpolation methods beyond the built-in nearest-neighbor. It requires building two libraries from source: YAXT and YAC.
+
+On DKRZ Levante, load the OpenMPI module first:
+```bash
+module load openmpi/4.1.2-gcc-11.2.0
+```
 
 #### 1. Build YAXT
 
