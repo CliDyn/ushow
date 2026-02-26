@@ -136,6 +136,19 @@ int yac_method_needs_connectivity(USYacMethod m) {
 
 /* Build YAC source grid from USMesh */
 static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method) {
+    /* For 2D curvilinear or 1D structured grids with known dimensions,
+     * use YAC's native curve_2d support. This avoids the need for
+     * auto-generated triangulation which fails on grids with folds
+     * (e.g., ORCA north fold) or irregular latitude distributions. */
+    if ((mesh->coord_type == COORD_TYPE_2D_CURVILINEAR ||
+         mesh->coord_type == COORD_TYPE_1D_STRUCTURED) &&
+        mesh->orig_nx >= 2 && mesh->orig_ny >= 2) {
+        size_t nbr_vertices[2] = {mesh->orig_nx, mesh->orig_ny};
+        int cyclic[2] = {0, 0};
+        return yac_basic_grid_curve_2d_deg_new(
+            "source", nbr_vertices, cyclic, mesh->lon, mesh->lat);
+    }
+
     if (mesh->n_elements > 0 && mesh->elem_nodes != NULL &&
         yac_method_needs_connectivity(method)) {
         /* Unstructured grid with cell connectivity (e.g. FESOM triangles) */
@@ -427,13 +440,22 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
 
     if (yac_method_needs_connectivity(method) &&
         (mesh->n_elements == 0 || mesh->elem_nodes == NULL)) {
-        /* Try to auto-generate connectivity from latitude bands */
-        printf("YAC: Auto-generating connectivity for method '%s'...\n",
-               yac_method_name(method));
-        if (latband_generate_connectivity(mesh) != 0) {
-            fprintf(stderr, "YAC regrid: method '%s' requires element connectivity "
-                    "and auto-generation failed\n", yac_method_name(method));
-            return NULL;
+        /* For curvilinear/structured grids, YAC handles connectivity natively
+         * via curve_2d grid type — skip auto-generated triangulation */
+        if ((mesh->coord_type == COORD_TYPE_2D_CURVILINEAR ||
+             mesh->coord_type == COORD_TYPE_1D_STRUCTURED) &&
+            mesh->orig_nx >= 2 && mesh->orig_ny >= 2) {
+            printf("YAC: Using native curvilinear grid support (%zu x %zu)\n",
+                   mesh->orig_nx, mesh->orig_ny);
+        } else {
+            /* Try to auto-generate connectivity from latitude bands */
+            printf("YAC: Auto-generating connectivity for method '%s'...\n",
+                   yac_method_name(method));
+            if (latband_generate_connectivity(mesh) != 0) {
+                fprintf(stderr, "YAC regrid: method '%s' requires element connectivity "
+                        "and auto-generation failed\n", yac_method_name(method));
+                return NULL;
+            }
         }
     }
 
@@ -469,6 +491,10 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     printf("YAC: Source grid: %zu points", mesh->n_points);
     if (mesh->n_elements > 0)
         printf(", %zu elements", mesh->n_elements);
+    else if ((mesh->coord_type == COORD_TYPE_2D_CURVILINEAR ||
+              mesh->coord_type == COORD_TYPE_1D_STRUCTURED) &&
+             mesh->orig_nx >= 2 && mesh->orig_ny >= 2)
+        printf(" (%zu x %zu curvilinear)", mesh->orig_nx, mesh->orig_ny);
     printf("\n");
     printf("YAC: Target grid: %zu x %zu (%zu cells)\n", nx, ny, nx * ny);
 

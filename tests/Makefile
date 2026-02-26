@@ -99,9 +99,9 @@ ifdef WITH_GRIB
 TEST_TARGETS += test_file_grib
 endif
 
-# Add yac test if enabled
+# Add yac tests if enabled
 ifdef WITH_YAC
-TEST_TARGETS += test_yac_3d
+TEST_TARGETS += test_yac_3d test_yac_curve2d
 endif
 
 # Object files needed from main project
@@ -174,9 +174,12 @@ test_latband: test_latband.c $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 test_file_grib: test_file_grib.c $(FILE_GRIB_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-# YAC 3D test (only built with WITH_YAC=1)
+# YAC tests (only built with WITH_YAC=1)
 REGRID_YAC_OBJ = $(SRCDIR)/regrid_yac.c
 test_yac_3d: test_yac_3d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+test_yac_curve2d: test_yac_curve2d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Run all tests
@@ -247,9 +250,12 @@ test-grib: test_file_grib
 test-yac-3d: test_yac_3d
 	./test_yac_3d
 
+test-yac-curve2d: test_yac_curve2d
+	./test_yac_curve2d
+
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d
+	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 	rm -rf /tmp/test_mitgcm_*
@@ -282,6 +288,7 @@ help:
 	@echo "  test-latband - Run latitude-band connectivity tests"
 	@echo "  test-grib    - Run GRIB tests only (requires WITH_GRIB=1)"
 	@echo "  test-yac-3d  - Run YAC 3D tests only (requires WITH_YAC=1)"
+	@echo "  test-yac-curve2d - Run YAC curvilinear grid tests (requires WITH_YAC=1)"
 	@echo "  test-integration - Run Integration tests only"
 	@echo "  test-term-render-mode - Run terminal render mode tests only"
 	@echo "  test-range-popup - Run range popup logic tests only"
