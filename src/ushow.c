@@ -1156,6 +1156,10 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_YAC
         if (options.yac_method >= 0) {
             printf("Creating YAC regrid structure...\n");
+            /* Load element connectivity on demand (needed for avg/conservative methods) */
+            if (mesh->n_elements == 0 || mesh->elem_nodes == NULL) {
+                mesh_load_connectivity(mesh, mesh_filename);
+            }
             if (yac_regrid_init() != 0) {
                 fprintf(stderr, "Failed to initialize YAC\n");
                 mesh_free(mesh);
