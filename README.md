@@ -179,6 +179,44 @@ make WITH_YAC=1 YAC_PREFIX=/custom/path/yac  # Custom install location
 
 The Makefile uses `pkg-config` to find YAC, with a fallback to `YAC_PREFIX` (default: `$HOME/local/yac`).
 
+### AWI Albedo
+
+On Albedo, dependencies are provided via environment modules and spack. First load spack and the NetCDF module:
+```bash
+module load spack
+module load netcdf-c/4.8.1-gcc12.1.0
+```
+
+Load the X11 development libraries from spack:
+```bash
+spack load /eub564f /gyimrqa /dp6g46v /aioyu3n /mxnurir /l6kzj5s /x75vrux
+```
+
+Basic build:
+```bash
+make
+```
+
+For optional Zarr support, load c-blosc and lz4 (c-blosc may need to be installed into your home directory first with `spack install c-blosc%gcc@12.1.0`):
+```bash
+spack load c-blosc%gcc@12.1.0
+spack load /ahjcumd   # lz4
+```
+
+For optional GRIB support, load eccodes:
+```bash
+spack load /fi5kc7g   # eccodes 2.34.0
+```
+
+Build with Zarr and GRIB support (explicit paths needed because the Makefile's auto-detection does not cover Albedo):
+```bash
+make WITH_ZARR=1 WITH_GRIB=1 \
+  ZARR_CFLAGS="-DHAVE_ZARR -I$HOME/.spack/sw/c-blosc/1.21.5-rrsl7wt/include -I/albedo/soft/sw/spack-sw/lz4/1.9.3-ahjcumd/include" \
+  ZARR_LIBS="-L$HOME/.spack/sw/c-blosc/1.21.5-rrsl7wt/lib64 -L/albedo/soft/sw/spack-sw/lz4/1.9.3-ahjcumd/lib -lblosc -llz4 -Wl,-rpath,$HOME/.spack/sw/c-blosc/1.21.5-rrsl7wt/lib64 -Wl,-rpath,/albedo/soft/sw/spack-sw/lz4/1.9.3-ahjcumd/lib"
+```
+
+The binary will have library paths embedded via rpath, so no `LD_LIBRARY_PATH` is needed at runtime.
+
 ### Custom Library Paths
 
 If your libraries are in non-standard locations, you can override the detection:
