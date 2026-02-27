@@ -168,6 +168,12 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
                     regrid->target_lat_min > -90.0  || regrid->target_lat_max < 90.0)) {
             view->needs_regional_range = 1;
         }
+#ifdef HAVE_YAC
+        else if (view->yac_regrid &&
+                 yac_regrid_is_regional((const USYacRegrid*)view->yac_regrid)) {
+            view->needs_regional_range = 1;
+        }
+#endif
     }
 
     view->data_valid = 0;

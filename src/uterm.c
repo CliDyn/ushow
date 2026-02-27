@@ -1098,7 +1098,8 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         yac_regrid_ptr = yac_regrid_create(
-            mesh, options.target_resolution, (USYacMethod)options.yac_method);
+            mesh, options.target_resolution, (USYacMethod)options.yac_method,
+            &options.target_config);
         if (!yac_regrid_ptr) {
             fprintf(stderr, "Failed to create YAC regrid structure\n");
             yac_regrid_finalize();

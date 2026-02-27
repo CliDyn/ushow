@@ -9,6 +9,7 @@
 #ifdef HAVE_YAC
 
 #include "regrid_yac.h"
+#include "projection.h"
 #include "healpix.h"
 #include <mpi.h>
 #include <stdlib.h>
@@ -40,6 +41,11 @@ struct USYacRegrid {
 
     USYacMethod method;
     double resolution;  /* target grid resolution (for rebuilding) */
+
+    /* Projection info */
+    ProjectionType projection;
+    double laea_R;
+    USTargetConfig config;  /* stored copy for 3D rebuild path */
 
     /* Per-depth cache (--yac-3d) */
     USMesh *mesh_ref;                        /* non-owned, for lazy creation */
@@ -208,61 +214,152 @@ static void lonlat_deg_to_xyz(double lon_deg, double lat_deg, double xyz[3]) {
     xyz[2] = sin(lat_rad);
 }
 
-/* Build regular lon/lat target grid */
+/* Build target grid (equirectangular or LAEA polar) */
 static struct yac_basic_grid *build_target_grid(
-    double resolution, size_t *out_nx, size_t *out_ny) {
+    double resolution, const USTargetConfig *config,
+    size_t *out_nx, size_t *out_ny) {
 
-    double lon_min = -180.0, lon_max = 180.0;
-    double lat_min = -90.0,  lat_max = 90.0;
+    /* Default to global equirectangular if no config */
+    USTargetConfig default_cfg;
+    if (!config) {
+        target_config_init_default(&default_cfg);
+        config = &default_cfg;
+    }
 
-    size_t nx = (size_t)((lon_max - lon_min) / resolution);
-    size_t ny = (size_t)((lat_max - lat_min) / resolution);
+    if (config->projection == PROJ_EQUIRECTANGULAR) {
+        /* Equirectangular (global or regional --box) */
+        double lon_min = config->lon_min, lon_max = config->lon_max;
+        double lat_min = config->lat_min, lat_max = config->lat_max;
 
-    size_t n_lon_verts = nx + 1;
-    size_t n_lat_verts = ny + 1;
+        size_t nx = (size_t)((lon_max - lon_min) / resolution);
+        size_t ny = (size_t)((lat_max - lat_min) / resolution);
+        if (nx < 1) nx = 1;
+        if (ny < 1) ny = 1;
 
-    double *lon_verts = malloc(n_lon_verts * sizeof(double));
-    double *lat_verts = malloc(n_lat_verts * sizeof(double));
-    if (!lon_verts || !lat_verts) {
+        size_t n_lon_verts = nx + 1;
+        size_t n_lat_verts = ny + 1;
+
+        double *lon_verts = malloc(n_lon_verts * sizeof(double));
+        double *lat_verts = malloc(n_lat_verts * sizeof(double));
+        if (!lon_verts || !lat_verts) {
+            free(lon_verts);
+            free(lat_verts);
+            return NULL;
+        }
+
+        double dlon = (lon_max - lon_min) / (double)nx;
+        double dlat = (lat_max - lat_min) / (double)ny;
+
+        for (size_t i = 0; i <= nx; i++)
+            lon_verts[i] = lon_min + i * dlon;
+        for (size_t j = 0; j <= ny; j++)
+            lat_verts[j] = lat_min + j * dlat;
+
+        size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
+        int cyclic[2] = {0, 0};
+
+        struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
+            "target", nbr_vertices, cyclic, lon_verts, lat_verts);
+
         free(lon_verts);
         free(lat_verts);
+
+        /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
+        size_t n_cells = nx * ny;
+        yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
+        if (cell_coords) {
+            for (size_t j = 0; j < ny; j++) {
+                double lat_center = lat_min + (j + 0.5) * dlat;
+                for (size_t i = 0; i < nx; i++) {
+                    double lon_center = lon_min + (i + 0.5) * dlon;
+                    lonlat_deg_to_xyz(lon_center, lat_center,
+                                      cell_coords[j * nx + i]);
+                }
+            }
+            yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
+        }
+
+        *out_nx = nx;
+        *out_ny = ny;
+        return grid;
+    }
+
+    /* LAEA polar projection */
+    double R = EARTH_RADIUS_M;
+    int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+    double extent = laea_extent_from_cutoff(config->cutoff_lat, pole, R);
+
+    /* Convert resolution from degrees to meters (~111.32 km per degree) */
+    double res_m = resolution * 111320.0;
+    size_t n = (size_t)(2.0 * extent / res_m);
+    if (n < 2) n = 2;
+
+    double dx = 2.0 * extent / (double)n;
+    double dy = dx;
+
+    /* Build curvilinear grid: (n+1) x (n+1) vertices in lon/lat */
+    size_t nvx = n + 1;
+    size_t nvy = n + 1;
+    size_t n_verts = nvx * nvy;
+    double *vert_lon = malloc(n_verts * sizeof(double));
+    double *vert_lat = malloc(n_verts * sizeof(double));
+    if (!vert_lon || !vert_lat) {
+        free(vert_lon);
+        free(vert_lat);
         return NULL;
     }
 
-    double dlon = (lon_max - lon_min) / (double)nx;
-    double dlat = (lat_max - lat_min) / (double)ny;
+    for (size_t j = 0; j < nvy; j++) {
+        double py = -extent + j * dy;
+        for (size_t i = 0; i < nvx; i++) {
+            double px = -extent + i * dx;
+            size_t idx = j * nvx + i;
+            double lo, la;
+            if (laea_inverse(px, py, pole, R, &lo, &la) == 0) {
+                vert_lon[idx] = lo;
+                vert_lat[idx] = la;
+            } else {
+                /* Outside projection disk — place at pole with offset */
+                vert_lon[idx] = 0.0;
+                vert_lat[idx] = (pole > 0) ? 90.0 : -90.0;
+            }
+        }
+    }
 
-    for (size_t i = 0; i <= nx; i++)
-        lon_verts[i] = lon_min + i * dlon;
-    for (size_t j = 0; j <= ny; j++)
-        lat_verts[j] = lat_min + j * dlat;
-
-    size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
+    size_t nbr_vertices[2] = {nvx, nvy};
     int cyclic[2] = {0, 0};
+    struct yac_basic_grid *grid = yac_basic_grid_curve_2d_deg_new(
+        "target", nbr_vertices, cyclic, vert_lon, vert_lat);
 
-    struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
-        "target", nbr_vertices, cyclic, lon_verts, lat_verts);
+    free(vert_lon);
+    free(vert_lat);
 
-    free(lon_verts);
-    free(lat_verts);
-
-    /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
-    size_t n_cells = nx * ny;
+    /* Add cell center coordinates */
+    size_t n_cells = n * n;
     yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
     if (cell_coords) {
-        for (size_t j = 0; j < ny; j++) {
-            double lat_center = lat_min + (j + 0.5) * dlat;
-            for (size_t i = 0; i < nx; i++) {
-                double lon_center = lon_min + (i + 0.5) * dlon;
-                lonlat_deg_to_xyz(lon_center, lat_center,
-                                  cell_coords[j * nx + i]);
+        for (size_t j = 0; j < n; j++) {
+            double py = -extent + (j + 0.5) * dy;
+            for (size_t i = 0; i < n; i++) {
+                double px = -extent + (i + 0.5) * dx;
+                double lo, la;
+                if (laea_inverse(px, py, pole, R, &lo, &la) == 0) {
+                    lonlat_deg_to_xyz(lo, la, cell_coords[j * n + i]);
+                } else {
+                    lonlat_deg_to_xyz(0.0, (pole > 0) ? 90.0 : -90.0,
+                                      cell_coords[j * n + i]);
+                }
             }
         }
         yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
     }
 
-    *out_nx = nx;
-    *out_ny = ny;
+    printf("YAC LAEA %s pole: cutoff=%.0f° extent=%.0fkm grid=%zux%zu\n",
+           (pole > 0) ? "north" : "south",
+           config->cutoff_lat, extent / 1000.0, n, n);
+
+    *out_nx = n;
+    *out_ny = n;
     return grid;
 }
 
@@ -335,7 +432,8 @@ static enum yac_location get_tgt_location(USYacMethod method) {
 static struct yac_interpolation *
 build_interpolation(USMesh *mesh, USYacMethod method,
                     double resolution,
-                    const int *src_mask) {
+                    const int *src_mask,
+                    const USTargetConfig *config) {
     /* 1. Build grids */
     struct yac_basic_grid *src_grid = build_source_grid(mesh, method);
     if (!src_grid) return NULL;
@@ -348,7 +446,7 @@ build_interpolation(USMesh *mesh, USYacMethod method,
     }
 
     size_t nx, ny;
-    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, &nx, &ny);
+    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, config, &nx, &ny);
     if (!tgt_grid) {
         yac_basic_grid_delete(src_grid);
         return NULL;
@@ -432,7 +530,8 @@ build_interpolation(USMesh *mesh, USYacMethod method,
     return interp;
 }
 
-USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method) {
+USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method,
+                               const USTargetConfig *config) {
     if (!mesh || mesh->n_points == 0) {
         fprintf(stderr, "YAC regrid: invalid mesh\n");
         return NULL;
@@ -480,8 +579,15 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
         return NULL;
     }
 
+    /* Use global equirect defaults if no config provided */
+    USTargetConfig default_cfg;
+    if (!config) {
+        target_config_init_default(&default_cfg);
+        config = &default_cfg;
+    }
+
     size_t nx, ny;
-    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, &nx, &ny);
+    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, config, &nx, &ny);
     if (!tgt_grid) {
         fprintf(stderr, "YAC: Failed to create target grid\n");
         yac_basic_grid_delete(src_grid);
@@ -606,15 +712,29 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
 
     r->target_nx = nx;
     r->target_ny = ny;
-    r->target_lon_min = -180.0;
-    r->target_lat_min = -90.0;
-    r->target_dlon = 360.0 / (double)nx;
-    r->target_dlat = 180.0 / (double)ny;
     r->method = method;
     r->resolution = resolution;
     r->n_src_points = mesh->n_points;
     r->n_tgt_points = nx * ny;
     r->interp = interp;
+    r->projection = config->projection;
+    r->laea_R = EARTH_RADIUS_M;
+    r->config = *config;
+
+    if (config->projection == PROJ_EQUIRECTANGULAR) {
+        r->target_lon_min = config->lon_min;
+        r->target_lat_min = config->lat_min;
+        r->target_dlon = (config->lon_max - config->lon_min) / (double)nx;
+        r->target_dlat = (config->lat_max - config->lat_min) / (double)ny;
+    } else {
+        /* LAEA: store projected extent/spacing in lon/lat fields (meters) */
+        int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+        double extent = laea_extent_from_cutoff(config->cutoff_lat, pole, r->laea_R);
+        r->target_lon_min = -extent;
+        r->target_lat_min = -extent;
+        r->target_dlon = 2.0 * extent / (double)nx;
+        r->target_dlat = 2.0 * extent / (double)ny;
+    }
 
     /* Pre-allocate double buffers for float<->double conversion */
     r->src_buf = malloc(mesh->n_points * sizeof(double));
@@ -679,8 +799,24 @@ void yac_regrid_get_target_dims(const USYacRegrid *r, size_t *nx, size_t *ny) {
 void yac_regrid_get_lonlat(const USYacRegrid *r, size_t ix, size_t iy,
                             double *lon, double *lat) {
     if (!r) return;
-    if (lon) *lon = r->target_lon_min + (ix + 0.5) * r->target_dlon;
-    if (lat) *lat = r->target_lat_min + (iy + 0.5) * r->target_dlat;
+
+    if (r->projection == PROJ_EQUIRECTANGULAR) {
+        if (lon) *lon = r->target_lon_min + (ix + 0.5) * r->target_dlon;
+        if (lat) *lat = r->target_lat_min + (iy + 0.5) * r->target_dlat;
+    } else {
+        /* LAEA: compute projected coords, inverse-project */
+        int pole = (r->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+        double px = r->target_lon_min + (ix + 0.5) * r->target_dlon;
+        double py = r->target_lat_min + (iy + 0.5) * r->target_dlat;
+        double lo, la;
+        if (laea_inverse(px, py, pole, r->laea_R, &lo, &la) == 0) {
+            if (lon) *lon = lo;
+            if (lat) *lat = la;
+        } else {
+            if (lon) *lon = 0.0;
+            if (lat) *lat = 0.0;
+        }
+    }
 }
 
 USYacMethod yac_regrid_get_method(const USYacRegrid *r) {
@@ -742,7 +878,7 @@ void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
             double t0 = get_time_seconds();
             struct yac_interpolation *masked =
                 build_interpolation(r->mesh_ref, r->method,
-                                    r->resolution, mask);
+                                    r->resolution, mask, &r->config);
             free(mask);
 
             if (masked) {
@@ -779,6 +915,15 @@ void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
 
     for (size_t i = 0; i < n_tgt; i++)
         dst[i] = (float)tgt_d[i];
+}
+
+int yac_regrid_is_regional(const USYacRegrid *r) {
+    if (!r) return 0;
+    if (r->projection != PROJ_EQUIRECTANGULAR) return 1;
+    if (r->config.lon_min > -180.0 || r->config.lon_max < 180.0 ||
+        r->config.lat_min > -90.0  || r->config.lat_max < 90.0)
+        return 1;
+    return 0;
 }
 
 void yac_regrid_free(USYacRegrid *r) {

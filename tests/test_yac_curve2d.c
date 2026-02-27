@@ -87,7 +87,7 @@ TEST(curve2d_create_avg_arith) {
     ASSERT_NOT_NULL(mesh);
     ASSERT_EQ_SIZET(mesh->n_elements, 0);  /* No pre-existing connectivity */
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     /* Mesh should still have no elem_nodes (curve_2d handles it internally) */
@@ -102,7 +102,7 @@ TEST(curve2d_create_avg_dist) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_DIST);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_DIST, NULL);
     ASSERT_NOT_NULL(r);
 
     yac_regrid_free(r);
@@ -115,7 +115,7 @@ TEST(curve2d_create_nnn1) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1, NULL);
     ASSERT_NOT_NULL(r);
 
     yac_regrid_free(r);
@@ -127,7 +127,7 @@ TEST(curve2d_apply_produces_valid_output) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     float *src = malloc(mesh->n_points * sizeof(float));
@@ -162,7 +162,7 @@ TEST(curve2d_output_values_reasonable) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     float *src = malloc(mesh->n_points * sizeof(float));
@@ -204,7 +204,7 @@ TEST(curve2d_method_getter) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
     ASSERT_EQ_INT(yac_regrid_get_method(r), YAC_METHOD_AVERAGE_ARITH);
 
@@ -219,7 +219,7 @@ TEST(structured_1d_create_avg_arith) {
     ASSERT_NOT_NULL(mesh);
     ASSERT_EQ_SIZET(mesh->n_elements, 0);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     /* No auto-generated connectivity */
@@ -234,7 +234,7 @@ TEST(structured_1d_apply_produces_valid_output) {
     USMesh *mesh = create_structured_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     float *src = malloc(mesh->n_points * sizeof(float));
@@ -268,7 +268,7 @@ TEST(curve2d_larger_grid) {
     USMesh *mesh = create_curvilinear_mesh(50, 40);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 5.0, YAC_METHOD_AVERAGE_ARITH);
+    USYacRegrid *r = yac_regrid_create(mesh, 5.0, YAC_METHOD_AVERAGE_ARITH, NULL);
     ASSERT_NOT_NULL(r);
 
     float *src = malloc(mesh->n_points * sizeof(float));
@@ -301,7 +301,7 @@ TEST(curve2d_nnn4dist) {
     USMesh *mesh = create_curvilinear_mesh(20, 15);
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_4_DIST);
+    USYacRegrid *r = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_4_DIST, NULL);
     ASSERT_NOT_NULL(r);
 
     float *src = malloc(mesh->n_points * sizeof(float));

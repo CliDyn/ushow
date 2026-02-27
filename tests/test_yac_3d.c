@@ -58,7 +58,7 @@ static USYacRegrid *g_regrid = NULL;
 static int setup(void) {
     g_mesh = create_small_mesh();
     if (!g_mesh) return 0;
-    g_regrid = yac_regrid_create(g_mesh, 10.0, YAC_METHOD_NNN_1);
+    g_regrid = yac_regrid_create(g_mesh, 10.0, YAC_METHOD_NNN_1, NULL);
     return g_regrid != NULL;
 }
 

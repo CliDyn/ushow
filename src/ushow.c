@@ -564,11 +564,13 @@ static void on_yac_method_cycle(void) {
     USYacMethod next = yac_cycle_order[(pos + 1) % YAC_CYCLE_COUNT];
 
     yac_regrid_free(yac_regrid_ptr);
-    yac_regrid_ptr = yac_regrid_create(mesh, options.target_resolution, next);
+    yac_regrid_ptr = yac_regrid_create(mesh, options.target_resolution, next,
+                                       &options.target_config);
     if (!yac_regrid_ptr) {
         /* Fallback to avg_arith */
         yac_regrid_ptr = yac_regrid_create(
-            mesh, options.target_resolution, YAC_METHOD_AVERAGE_ARITH);
+            mesh, options.target_resolution, YAC_METHOD_AVERAGE_ARITH,
+            &options.target_config);
     }
     if (options.yac_3d)
         yac_regrid_enable_3d(yac_regrid_ptr, mesh);
@@ -1235,7 +1237,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             yac_regrid_ptr = yac_regrid_create(
-                mesh, options.target_resolution, (USYacMethod)options.yac_method);
+                mesh, options.target_resolution, (USYacMethod)options.yac_method,
+                &options.target_config);
             if (!yac_regrid_ptr) {
                 fprintf(stderr, "Failed to create YAC regrid\n");
                 yac_regrid_finalize();

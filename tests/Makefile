@@ -101,7 +101,7 @@ endif
 
 # Add yac tests if enabled
 ifdef WITH_YAC
-TEST_TARGETS += test_yac_3d test_yac_curve2d test_yac_click
+TEST_TARGETS += test_yac_3d test_yac_curve2d test_yac_click test_yac_regional
 endif
 
 # Object files needed from main project
@@ -185,13 +185,16 @@ test_file_grib: test_file_grib.c $(FILE_GRIB_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 
 # YAC tests (only built with WITH_YAC=1)
 REGRID_YAC_OBJ = $(SRCDIR)/regrid_yac.c
-test_yac_3d: test_yac_3d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+test_yac_3d: test_yac_3d.c $(REGRID_YAC_OBJ) $(PROJECTION_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-test_yac_curve2d: test_yac_curve2d.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+test_yac_curve2d: test_yac_curve2d.c $(REGRID_YAC_OBJ) $(PROJECTION_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-test_yac_click: test_yac_click.c $(REGRID_YAC_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+test_yac_click: test_yac_click.c $(REGRID_YAC_OBJ) $(PROJECTION_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+test_yac_regional: test_yac_regional.c $(REGRID_YAC_OBJ) $(PROJECTION_OBJ) $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Run all tests
@@ -274,9 +277,12 @@ test-yac-curve2d: test_yac_curve2d
 test-yac-click: test_yac_click
 	./test_yac_click
 
+test-yac-regional: test_yac_regional
+	./test_yac_regional
+
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_projection test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d test_yac_click
+	rm -f $(TEST_TARGETS) test_projection test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d test_yac_click test_yac_regional
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 	rm -rf /tmp/test_mitgcm_*

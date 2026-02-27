@@ -44,7 +44,7 @@ TEST(yac_click_lonlat_correct) {
     ASSERT_NOT_NULL(mesh);
 
     /* Use coarse resolution (10 deg) for fast test */
-    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1);
+    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -78,7 +78,7 @@ TEST(yac_click_kdtree_finds_nearest_node) {
     USMesh *mesh = create_small_mesh();
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1);
+    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1, NULL);
     ASSERT_NOT_NULL(regrid);
 
     /* Build KDTree from mesh (same as on_mouse_click does lazily) */
@@ -170,7 +170,7 @@ TEST(yac_click_regridded_data_detectable) {
     USMesh *mesh = create_small_mesh();
     ASSERT_NOT_NULL(mesh);
 
-    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1);
+    USYacRegrid *regrid = yac_regrid_create(mesh, 10.0, YAC_METHOD_NNN_1, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;

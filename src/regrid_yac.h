@@ -51,7 +51,8 @@ void yac_regrid_finalize(void);
  *
  * Returns NULL on failure.
  */
-USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method);
+USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method,
+                               const USTargetConfig *config);
 
 /*
  * Apply regridding to data using precomputed weights (sparse matrix-vector multiply).
@@ -113,6 +114,11 @@ int yac_regrid_is_3d(const USYacRegrid *r);
  */
 void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
                           const float *src, float fill, float *dst);
+
+/*
+ * Check if regrid uses a non-global region (box or polar projection).
+ */
+int yac_regrid_is_regional(const USYacRegrid *r);
 
 /*
  * Free regridding structure.
