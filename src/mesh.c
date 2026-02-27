@@ -770,7 +770,7 @@ static int load_element_connectivity(USMesh *mesh, int ncid) {
 
     /* Try to find face_nodes variable (UGRID convention) */
     static const char *CONN_NAMES[] = {
-        "face_nodes", "face_node_connectivity", "elem", NULL
+        "face_nodes", "face_node_connectivity", "elem", "elements", NULL
     };
     int found_conn = 0;
     for (int i = 0; CONN_NAMES[i] != NULL; i++) {
