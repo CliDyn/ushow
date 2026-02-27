@@ -87,7 +87,7 @@ endif
 SRCDIR = ../src
 
 # Test executables
-TEST_TARGETS = test_kdtree test_mesh test_regrid test_projection test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband
+TEST_TARGETS = test_kdtree test_mesh test_regrid test_projection test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband test_regional_range
 
 # Add zarr test if enabled
 ifdef WITH_ZARR
@@ -174,6 +174,11 @@ HEALPIX_OBJ = $(SRCDIR)/healpix.c
 test_latband: test_latband.c $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
+VIEW_OBJ = $(SRCDIR)/view.c
+
+test_regional_range: test_regional_range.c $(VIEW_OBJ) $(FILE_NETCDF_OBJ) $(FILE_MITGCM_OBJ) $(REGRID_OBJ) $(PROJECTION_OBJ) $(COLORMAPS_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
 # GRIB test (only built with WITH_GRIB=1)
 test_file_grib: test_file_grib.c $(FILE_GRIB_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
@@ -250,6 +255,9 @@ test-timeseries: test_timeseries
 
 test-latband: test_latband
 	./test_latband
+
+test-regional-range: test_regional_range
+	./test_regional_range
 
 test-zarr: test_file_zarr
 	./test_file_zarr

@@ -841,9 +841,10 @@ static void update_display(void) {
     if (pixels) {
         x_update_image(pixels, width, height);
 
-        /* Update colorbar (256 pixels wide, horizontal) */
+        /* Update colorbar and range label */
         if (current_var) {
             x_update_colorbar(current_var->user_min, current_var->user_max, 256);
+            x_update_range_label(current_var->user_min, current_var->user_max);
         }
     }
 }

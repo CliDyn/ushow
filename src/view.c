@@ -157,6 +157,17 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
         var->user_min = var->global_min;
         var->user_max = var->global_max;
         var->range_set = 1;
+
+        /* Check if a non-global region is active; if so, recompute range
+         * from the regridded (regional) data on the first view_update */
+        view->needs_regional_range = 0;
+        if (regrid && regrid->projection != PROJ_EQUIRECTANGULAR) {
+            view->needs_regional_range = 1;
+        } else if (regrid &&
+                   (regrid->target_lon_min > -180.0 || regrid->target_lon_max < 180.0 ||
+                    regrid->target_lat_min > -90.0  || regrid->target_lat_max < 90.0)) {
+            view->needs_regional_range = 1;
+        }
     }
 
     view->data_valid = 0;
@@ -506,6 +517,28 @@ int view_update(USView *view) {
     {
         regrid_apply(view->regrid, view->raw_data,
                      view->variable->fill_value, view->regridded_data);
+    }
+
+    /* Compute regional range from regridded data if needed */
+    if (view->needs_regional_range) {
+        float fill = view->variable->fill_value;
+        size_t n = view->data_nx * view->data_ny;
+        float rmin = 1e30f, rmax = -1e30f;
+        for (size_t i = 0; i < n; i++) {
+            float v = view->regridded_data[i];
+            if (v != v) continue;  /* NaN */
+            if (fabsf(v) > INVALID_DATA_THRESHOLD) continue;
+            if (fabsf(v - fill) < 1e-6f * fabsf(fill)) continue;
+            if (v < rmin) rmin = v;
+            if (v > rmax) rmax = v;
+        }
+        if (rmin <= rmax) {
+            view->variable->user_min = rmin;
+            view->variable->user_max = rmax;
+            printf("Regional range for %s: [%.6g, %.6g]\n",
+                   view->variable->name, rmin, rmax);
+        }
+        view->needs_regional_range = 0;
     }
 
     /* Convert to pixels with scaling */

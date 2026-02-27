@@ -262,6 +262,7 @@ struct USView {
 
     /* Data status */
     int         data_valid;
+    int         needs_regional_range; /* Recompute range from regridded data */
 
     /* Animation state */
     int         animating;
