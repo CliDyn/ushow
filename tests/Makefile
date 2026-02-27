@@ -87,7 +87,7 @@ endif
 SRCDIR = ../src
 
 # Test executables
-TEST_TARGETS = test_kdtree test_mesh test_regrid test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband
+TEST_TARGETS = test_kdtree test_mesh test_regrid test_projection test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband
 
 # Add zarr test if enabled
 ifdef WITH_ZARR
@@ -108,6 +108,7 @@ endif
 KDTREE_OBJ = $(SRCDIR)/kdtree.c
 MESH_OBJ = $(SRCDIR)/mesh.c
 REGRID_OBJ = $(SRCDIR)/regrid.c
+PROJECTION_OBJ = $(SRCDIR)/projection.c
 COLORMAPS_OBJ = $(SRCDIR)/colormaps.c
 FILE_NETCDF_OBJ = $(SRCDIR)/file_netcdf.c
 FILE_MITGCM_OBJ = $(SRCDIR)/file_mitgcm.c
@@ -135,7 +136,10 @@ test_kdtree: test_kdtree.c $(KDTREE_OBJ)
 test_mesh: test_mesh.c $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-test_regrid: test_regrid.c $(REGRID_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+test_regrid: test_regrid.c $(REGRID_OBJ) $(PROJECTION_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+test_projection: test_projection.c $(PROJECTION_OBJ) $(REGRID_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_colormaps: test_colormaps.c $(COLORMAPS_OBJ)
@@ -147,7 +151,7 @@ test_file_netcdf: test_file_netcdf.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OB
 test_file_mitgcm: test_file_mitgcm.c $(FILE_MITGCM_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-test_integration: test_integration.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ) $(REGRID_OBJ) $(COLORMAPS_OBJ)
+test_integration: test_integration.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ) $(REGRID_OBJ) $(PROJECTION_OBJ) $(COLORMAPS_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_term_render_mode: test_term_render_mode.c $(SRCDIR)/term_render_mode.c
@@ -220,6 +224,9 @@ test-mesh: test_mesh
 test-regrid: test_regrid
 	./test_regrid
 
+test-projection: test_projection
+	./test_projection
+
 test-colormaps: test_colormaps
 	./test_colormaps
 
@@ -261,7 +268,7 @@ test-yac-click: test_yac_click
 
 # Clean up
 clean:
-	rm -f $(TEST_TARGETS) test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d test_yac_click
+	rm -f $(TEST_TARGETS) test_projection test_file_zarr test_file_grib test_latband test_yac_3d test_yac_curve2d test_yac_click
 	rm -f /tmp/test_ushow_*.nc
 	rm -rf /tmp/test_ushow_zarr_*.zarr
 	rm -rf /tmp/test_mitgcm_*

@@ -20,7 +20,7 @@
 #define DEFAULT_RESOLUTION  1.0  /* degrees */
 
 /* Default influence radius for interpolation (meters) */
-#define DEFAULT_INFLUENCE_RADIUS_M  200000.0  /* 200 km */
+#define DEFAULT_INFLUENCE_RADIUS_M  80000.0   /* 80 km */
 
 /* Fill value for missing data */
 #define DEFAULT_FILL_VALUE  1.0e20f
@@ -62,6 +62,21 @@ typedef struct USMesh USMesh;
 typedef struct USRegrid USRegrid;
 typedef struct USView USView;
 typedef struct KDTree KDTree;
+
+/* Projection type for target grid */
+typedef enum {
+    PROJ_EQUIRECTANGULAR = 0,
+    PROJ_LAEA_NORTH,
+    PROJ_LAEA_SOUTH
+} ProjectionType;
+
+/* Target grid configuration */
+typedef struct {
+    ProjectionType projection;
+    double lon_min, lon_max;     /* For equirect: geographic bounds */
+    double lat_min, lat_max;     /* Default: -180,180,-90,90 */
+    double cutoff_lat;           /* For LAEA: degrees from equator (default 60) */
+} USTargetConfig;
 
 /* Mesh/coordinate structure - unified coordinate system */
 struct USMesh {
@@ -113,6 +128,10 @@ struct USRegrid {
 
     /* Source mesh reference */
     size_t      source_n_points;
+
+    /* Projection info */
+    ProjectionType projection;
+    double      laea_R;              /* Earth radius used for LAEA */
 };
 
 /* Variable structure */
@@ -257,6 +276,7 @@ typedef struct {
     char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
     int         frame_delay_ms;     /* Animation speed */
     int         polygon_only;       /* Skip regridding, polygon mode only */
+    USTargetConfig target_config;   /* Target grid configuration */
 #ifdef HAVE_YAC
     int         yac_method;        /* YAC interpolation method (-1 = disabled) */
     int         yac_3d;            /* Per-depth masked interpolation */

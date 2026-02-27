@@ -76,6 +76,7 @@ typedef struct {
     int render_mode;     /* TERM_RENDER_* */
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
+    USTargetConfig target_config;
 #ifdef HAVE_YAC
     int yac_method;
     int yac_3d;
@@ -90,6 +91,10 @@ static UTermOptions options = {
     .render_mode = TERM_RENDER_ASCII,
     .mesh_file = "",
     .glyph_ramp = DEFAULT_GLYPH_RAMP,
+    .target_config = { .projection = PROJ_EQUIRECTANGULAR,
+                       .lon_min = -180, .lon_max = 180,
+                       .lat_min = -90, .lat_max = 90,
+                       .cutoff_lat = 60.0 },
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -234,12 +239,15 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -m, --mesh <file>      Mesh file with coordinates\n");
     fprintf(stderr, "  -r, --resolution <deg> Target grid resolution (default: 1.0)\n");
-    fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
+    fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 80000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay in ms (default: 200)\n");
     fprintf(stderr, "      --chars <ramp>     Glyph ramp, e.g. \" .:-=+*#%%@\"\n");
     fprintf(stderr, "      --render <mode>    Render mode: ascii | half | braille\n");
     fprintf(stderr, "      --color            Force ANSI color output\n");
     fprintf(stderr, "      --no-color         Disable ANSI colors\n");
+    fprintf(stderr, "      --box W,E,S,N      Regional box (e.g. --box -10,30,35,70)\n");
+    fprintf(stderr, "      --polar <pole>     Polar LAEA projection (north or south)\n");
+    fprintf(stderr, "      --cutoff <deg>     Cutoff latitude for polar view (default: 60)\n");
 #ifdef HAVE_YAC
     fprintf(stderr, "      --yac              Use YAC interpolation (default: avg_arith)\n");
     fprintf(stderr, "      --yac-method <m>   Use YAC interpolation method:\n");
@@ -931,6 +939,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"render", required_argument, 0, 1003},
         {"color", no_argument, 0, 1001},
         {"no-color", no_argument, 0, 1002},
+        {"box",    required_argument, 0, 1200},
+        {"polar",  required_argument, 0, 1201},
+        {"cutoff", required_argument, 0, 1202},
 #ifdef HAVE_YAC
         {"yac",          no_argument,       0, 1099},
         {"yac-method", required_argument, 0, 1100},
@@ -1000,6 +1011,31 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
+            case 1200: {
+                double w, e, s, n;
+                if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
+                    fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
+                    return -1;
+                }
+                options.target_config.lon_min = w;
+                options.target_config.lon_max = e;
+                options.target_config.lat_min = s;
+                options.target_config.lat_max = n;
+                break;
+            }
+            case 1201:
+                if (strcmp(optarg, "north") == 0) {
+                    options.target_config.projection = PROJ_LAEA_NORTH;
+                } else if (strcmp(optarg, "south") == 0) {
+                    options.target_config.projection = PROJ_LAEA_SOUTH;
+                } else {
+                    fprintf(stderr, "Invalid --polar value: %s (use north or south)\n", optarg);
+                    return -1;
+                }
+                break;
+            case 1202:
+                options.target_config.cutoff_lat = atof(optarg);
+                break;
             default:
                 print_usage(argv[0]);
                 return -1;
@@ -1074,7 +1110,8 @@ int main(int argc, char *argv[]) {
     } else
 #endif
     {
-        regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
+        regrid = regrid_create(mesh, options.target_resolution, options.influence_radius,
+                               &options.target_config);
         if (!regrid) {
             fprintf(stderr, "Failed to create regrid structure\n");
             cleanup_all();

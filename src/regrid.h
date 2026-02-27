@@ -15,8 +15,10 @@
  * mesh: source mesh with coordinates
  * resolution: target grid resolution in degrees (default 1.0)
  * influence_radius_m: maximum distance for valid interpolation in meters
+ * config: target grid configuration (NULL for global equirectangular defaults)
  */
-USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius_m);
+USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius_m,
+                        const USTargetConfig *config);
 
 /*
  * Apply regridding to data.

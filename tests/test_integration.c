@@ -43,7 +43,7 @@ TEST(integration_full_pipeline_1d) {
 
     /* Create regrid - use 1600km influence for 10-degree grid spacing
        (diagonal of 10x10 degree cell at equator is ~1570km) */
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -119,7 +119,7 @@ TEST(integration_full_pipeline_curvilinear) {
     ASSERT_NOT_NULL(mesh);
     ASSERT_EQ(mesh->coord_type, COORD_TYPE_2D_CURVILINEAR);
 
-    USRegrid *regrid = regrid_create(mesh, 5.0, 300000.0);
+    USRegrid *regrid = regrid_create(mesh, 5.0, 300000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -168,7 +168,7 @@ TEST(integration_full_pipeline_unstructured) {
     ASSERT_EQ(mesh->coord_type, COORD_TYPE_1D_UNSTRUCTURED);
 
     /* Use larger influence radius for sparse unstructured data */
-    USRegrid *regrid = regrid_create(mesh, 5.0, 1000000.0);
+    USRegrid *regrid = regrid_create(mesh, 5.0, 1000000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -215,7 +215,7 @@ TEST(integration_time_stepping) {
     USMesh *mesh = mesh_create_from_netcdf(file->ncid, NULL);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -266,7 +266,7 @@ TEST(integration_colormap_cycling) {
     USMesh *mesh = mesh_create_from_netcdf(file->ncid, NULL);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -332,7 +332,7 @@ TEST(integration_scaled_output) {
     USMesh *mesh = mesh_create_from_netcdf(file->ncid, NULL);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1600000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -401,7 +401,7 @@ TEST(integration_depth_levels) {
     USMesh *mesh = mesh_create_from_netcdf(file->ncid, NULL);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -481,7 +481,7 @@ TEST(integration_stress_large_data) {
     ASSERT_NOT_NULL(mesh);
     ASSERT_EQ_SIZET(mesh->n_points, 180 * 90);
 
-    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0);
+    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -544,7 +544,7 @@ TEST(integration_coordinate_transform) {
     ASSERT_NOT_NULL(mesh);
 
     /* Create regrid with 1 degree resolution */
-    USRegrid *regrid = regrid_create(mesh, 1.0, 600000.0);  /* 600km influence */
+    USRegrid *regrid = regrid_create(mesh, 1.0, 600000.0, NULL);  /* 600km influence */
     ASSERT_NOT_NULL(regrid);
 
     float source_data[] = {1.0f, 2.0f, 3.0f, 4.0f};

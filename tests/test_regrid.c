@@ -68,7 +68,7 @@ static USMesh *create_test_mesh_local(double lon_min, double lon_max,
 
 /* Test regrid_create with NULL mesh */
 TEST(regrid_create_null_mesh) {
-    USRegrid *regrid = regrid_create(NULL, 1.0, 200000.0);
+    USRegrid *regrid = regrid_create(NULL, 1.0, 200000.0, NULL);
     ASSERT_NULL(regrid);
     return 1;
 }
@@ -78,7 +78,7 @@ TEST(regrid_create_basic) {
     USMesh *mesh = create_test_mesh_global(36, 18);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     /* Check target grid dimensions */
@@ -98,7 +98,7 @@ TEST(regrid_target_dims) {
     ASSERT_NOT_NULL(mesh);
 
     /* Resolution 2 degrees -> 180x90 */
-    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0);
+    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -125,7 +125,7 @@ TEST(regrid_get_lonlat) {
     USMesh *mesh = create_test_mesh_global(36, 18);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     double lon, lat;
@@ -150,7 +150,7 @@ TEST(regrid_apply_uniform) {
     USMesh *mesh = create_test_mesh_global(36, 18);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0);  /* Large influence radius */
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0, NULL);  /* Large influence radius */
     ASSERT_NOT_NULL(regrid);
 
     size_t source_n = mesh->n_points;
@@ -191,7 +191,7 @@ TEST(regrid_apply_gradient) {
     USMesh *mesh = create_test_mesh_global(36, 18);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t source_n = mesh->n_points;
@@ -252,7 +252,7 @@ TEST(regrid_local_mesh) {
     USMesh *mesh = create_test_mesh_local(-10.0, 30.0, 35.0, 70.0, 40, 35);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0);
+    USRegrid *regrid = regrid_create(mesh, 2.0, 200000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t nx, ny;
@@ -324,11 +324,11 @@ TEST(regrid_influence_radius) {
     ASSERT_NOT_NULL(mesh);
 
     /* Small influence radius - fewer valid points */
-    USRegrid *regrid_small = regrid_create(mesh, 10.0, 100000.0);  /* 100 km */
+    USRegrid *regrid_small = regrid_create(mesh, 10.0, 100000.0, NULL);  /* 100 km */
     ASSERT_NOT_NULL(regrid_small);
 
     /* Large influence radius - more valid points */
-    USRegrid *regrid_large = regrid_create(mesh, 10.0, 5000000.0);  /* 5000 km */
+    USRegrid *regrid_large = regrid_create(mesh, 10.0, 5000000.0, NULL);  /* 5000 km */
     ASSERT_NOT_NULL(regrid_large);
 
     size_t nx, ny;
@@ -377,7 +377,7 @@ TEST(regrid_resolution) {
     };
 
     for (size_t t = 0; t < sizeof(tests)/sizeof(tests[0]); t++) {
-        USRegrid *regrid = regrid_create(mesh, tests[t].res, 500000.0);
+        USRegrid *regrid = regrid_create(mesh, tests[t].res, 500000.0, NULL);
         ASSERT_NOT_NULL(regrid);
 
         size_t nx, ny;
@@ -397,7 +397,7 @@ TEST(regrid_apply_fill_value) {
     USMesh *mesh = create_test_mesh_global(36, 18);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0);
+    USRegrid *regrid = regrid_create(mesh, 10.0, 1000000.0, NULL);
     ASSERT_NOT_NULL(regrid);
 
     size_t source_n = mesh->n_points;
@@ -455,7 +455,7 @@ TEST(regrid_identity) {
     USMesh *mesh = mesh_create(lon, lat, nx * ny, COORD_TYPE_1D_STRUCTURED);
     ASSERT_NOT_NULL(mesh);
 
-    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0);  /* 10 degree resolution */
+    USRegrid *regrid = regrid_create(mesh, 10.0, 500000.0, NULL);  /* 10 degree resolution */
     ASSERT_NOT_NULL(regrid);
 
     size_t target_nx, target_ny;

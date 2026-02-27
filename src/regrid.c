@@ -3,15 +3,24 @@
  */
 
 #include "regrid.h"
+#include "projection.h"
 #include "kdtree.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius_m) {
+USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius_m,
+                        const USTargetConfig *config) {
     if (!mesh || !mesh->xyz || mesh->n_points == 0) {
         fprintf(stderr, "Invalid mesh for regridding\n");
         return NULL;
+    }
+
+    /* Use global equirect defaults if no config provided */
+    USTargetConfig default_config;
+    if (!config) {
+        target_config_init_default(&default_config);
+        config = &default_config;
     }
 
     USRegrid *regrid = calloc(1, sizeof(USRegrid));
@@ -21,18 +30,47 @@ USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius
     regrid->influence_radius_meters = influence_radius_m;
     regrid->influence_radius_chord = meters_to_chord(influence_radius_m);
     regrid->source_n_points = mesh->n_points;
+    regrid->projection = config->projection;
+    regrid->laea_R = EARTH_RADIUS_M;
 
-    /* Create target grid (global) */
-    regrid->target_lon_min = -180.0;
-    regrid->target_lon_max = 180.0;
-    regrid->target_lat_min = -90.0;
-    regrid->target_lat_max = 90.0;
+    /* Create target grid based on projection */
+    if (config->projection == PROJ_EQUIRECTANGULAR) {
+        regrid->target_lon_min = config->lon_min;
+        regrid->target_lon_max = config->lon_max;
+        regrid->target_lat_min = config->lat_min;
+        regrid->target_lat_max = config->lat_max;
 
-    regrid->target_nx = (size_t)((regrid->target_lon_max - regrid->target_lon_min) / resolution);
-    regrid->target_ny = (size_t)((regrid->target_lat_max - regrid->target_lat_min) / resolution);
+        regrid->target_nx = (size_t)((regrid->target_lon_max - regrid->target_lon_min) / resolution);
+        regrid->target_ny = (size_t)((regrid->target_lat_max - regrid->target_lat_min) / resolution);
 
-    regrid->target_dlon = (regrid->target_lon_max - regrid->target_lon_min) / regrid->target_nx;
-    regrid->target_dlat = (regrid->target_lat_max - regrid->target_lat_min) / regrid->target_ny;
+        regrid->target_dlon = (regrid->target_lon_max - regrid->target_lon_min) / regrid->target_nx;
+        regrid->target_dlat = (regrid->target_lat_max - regrid->target_lat_min) / regrid->target_ny;
+    } else {
+        /* LAEA polar projection */
+        int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+        double extent = laea_extent_from_cutoff(config->cutoff_lat, pole, regrid->laea_R);
+
+        /* Convert resolution from degrees to meters (~111.32 km per degree) */
+        double res_m = resolution * 111320.0;
+        size_t n = (size_t)(2.0 * extent / res_m);
+        if (n < 2) n = 2;
+
+        regrid->target_nx = n;
+        regrid->target_ny = n;
+
+        /* Store projected bounds (meters) in lon/lat fields */
+        regrid->target_lon_min = -extent;
+        regrid->target_lon_max = extent;
+        regrid->target_lat_min = -extent;
+        regrid->target_lat_max = extent;
+
+        regrid->target_dlon = 2.0 * extent / n;
+        regrid->target_dlat = 2.0 * extent / n;
+
+        printf("LAEA %s pole: cutoff=%.0f° extent=%.0fkm grid=%zux%zu\n",
+               (pole > 0) ? "north" : "south",
+               config->cutoff_lat, extent / 1000.0, n, n);
+    }
 
     size_t n_target = regrid->target_nx * regrid->target_ny;
 
@@ -66,11 +104,27 @@ USRegrid *regrid_create(USMesh *mesh, double resolution, double influence_radius
     size_t valid_count = 0;
 
     for (size_t j = 0; j < regrid->target_ny; j++) {
-        double lat = regrid->target_lat_min + (j + 0.5) * regrid->target_dlat;
-
         for (size_t i = 0; i < regrid->target_nx; i++) {
-            double lon = regrid->target_lon_min + (i + 0.5) * regrid->target_dlon;
             size_t target_idx = j * regrid->target_nx + i;
+            double lon, lat;
+
+            if (config->projection == PROJ_EQUIRECTANGULAR) {
+                lon = regrid->target_lon_min + (i + 0.5) * regrid->target_dlon;
+                lat = regrid->target_lat_min + (j + 0.5) * regrid->target_dlat;
+            } else {
+                /* LAEA: compute projected (x,y), inverse-project to lon/lat */
+                int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+                double px = regrid->target_lon_min + (i + 0.5) * regrid->target_dlon;
+                double py = regrid->target_lat_min + (j + 0.5) * regrid->target_dlat;
+
+                if (laea_inverse(px, py, pole, regrid->laea_R, &lon, &lat) != 0) {
+                    /* Outside projection disk */
+                    regrid->nn_indices[target_idx] = 0;
+                    regrid->nn_distances[target_idx] = 1e30;
+                    regrid->valid_mask[target_idx] = 0;
+                    continue;
+                }
+            }
 
             /* Convert target point to Cartesian */
             lonlat_to_cartesian(lon, lat, &query[0], &query[1], &query[2]);
@@ -138,8 +192,24 @@ void regrid_get_target_dims(const USRegrid *regrid, size_t *nx, size_t *ny) {
 void regrid_get_lonlat(const USRegrid *regrid, size_t ix, size_t iy,
                        double *lon, double *lat) {
     if (!regrid) return;
-    if (lon) *lon = regrid->target_lon_min + (ix + 0.5) * regrid->target_dlon;
-    if (lat) *lat = regrid->target_lat_min + (iy + 0.5) * regrid->target_dlat;
+
+    if (regrid->projection == PROJ_EQUIRECTANGULAR) {
+        if (lon) *lon = regrid->target_lon_min + (ix + 0.5) * regrid->target_dlon;
+        if (lat) *lat = regrid->target_lat_min + (iy + 0.5) * regrid->target_dlat;
+    } else {
+        /* LAEA: compute projected coords, inverse-project */
+        int pole = (regrid->projection == PROJ_LAEA_NORTH) ? 1 : -1;
+        double px = regrid->target_lon_min + (ix + 0.5) * regrid->target_dlon;
+        double py = regrid->target_lat_min + (iy + 0.5) * regrid->target_dlat;
+        double lo, la;
+        if (laea_inverse(px, py, pole, regrid->laea_R, &lo, &la) == 0) {
+            if (lon) *lon = lo;
+            if (lat) *lat = la;
+        } else {
+            if (lon) *lon = 0.0;
+            if (lat) *lat = 0.0;
+        }
+    }
 }
 
 void regrid_free(USRegrid *regrid) {

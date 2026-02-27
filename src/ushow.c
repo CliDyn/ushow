@@ -55,6 +55,10 @@ static USOptions options = {
     .influence_radius = DEFAULT_INFLUENCE_RADIUS_M,
     .target_resolution = DEFAULT_RESOLUTION,
     .frame_delay_ms = 200,
+    .target_config = { .projection = PROJ_EQUIRECTANGULAR,
+                       .lon_min = -180, .lon_max = 180,
+                       .lat_min = -90, .lat_max = 90,
+                       .cutoff_lat = 60.0 },
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -851,9 +855,12 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -m, --mesh <file>      Mesh file with coordinates\n");
     fprintf(stderr, "  -r, --resolution <deg> Target grid resolution (default: 1.0)\n");
-    fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 200000)\n");
+    fprintf(stderr, "  -i, --influence <m>    Influence radius in meters (default: 80000)\n");
     fprintf(stderr, "  -d, --delay <ms>       Animation frame delay (default: 200)\n");
     fprintf(stderr, "  -p, --polygon-only     Skip regridding, use polygon mode only (faster)\n");
+    fprintf(stderr, "      --box W,E,S,N      Regional box (e.g. --box -10,30,35,70)\n");
+    fprintf(stderr, "      --polar <pole>     Polar LAEA projection (north or south)\n");
+    fprintf(stderr, "      --cutoff <deg>     Cutoff latitude for polar view (default: 60)\n");
 #ifdef HAVE_YAC
     fprintf(stderr, "      --yac              Use YAC interpolation (default: avg_arith)\n");
     fprintf(stderr, "      --yac-method <m>   Use YAC with specific method:\n");
@@ -882,6 +889,9 @@ int main(int argc, char *argv[]) {
         {"influence",    required_argument, 0, 'i'},
         {"delay",        required_argument, 0, 'd'},
         {"polygon-only", no_argument,       0, 'p'},
+        {"box",          required_argument, 0, 1200},
+        {"polar",        required_argument, 0, 1201},
+        {"cutoff",       required_argument, 0, 1202},
 #ifdef HAVE_YAC
         {"yac",          no_argument,       0, 1099},
         {"yac-method",   required_argument, 0, 1100},
@@ -931,6 +941,31 @@ int main(int argc, char *argv[]) {
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
+            case 1200: {
+                double w, e, s, n;
+                if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
+                    fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
+                    return 1;
+                }
+                options.target_config.lon_min = w;
+                options.target_config.lon_max = e;
+                options.target_config.lat_min = s;
+                options.target_config.lat_max = n;
+                break;
+            }
+            case 1201:
+                if (strcmp(optarg, "north") == 0) {
+                    options.target_config.projection = PROJ_LAEA_NORTH;
+                } else if (strcmp(optarg, "south") == 0) {
+                    options.target_config.projection = PROJ_LAEA_SOUTH;
+                } else {
+                    fprintf(stderr, "Invalid --polar value: %s (use north or south)\n", optarg);
+                    return 1;
+                }
+                break;
+            case 1202:
+                options.target_config.cutoff_lat = atof(optarg);
+                break;
             case 'h':
             default:
                 print_usage(argv[0]);
@@ -1212,7 +1247,8 @@ int main(int argc, char *argv[]) {
 #endif
         {
             printf("Creating regrid structure...\n");
-            regrid = regrid_create(mesh, options.target_resolution, options.influence_radius);
+            regrid = regrid_create(mesh, options.target_resolution, options.influence_radius,
+                                   &options.target_config);
             if (!regrid) {
                 fprintf(stderr, "Failed to create regrid\n");
                 mesh_free(mesh);

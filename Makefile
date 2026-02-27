@@ -182,6 +182,7 @@ BINDIR = .
 COMMON_SRCS = $(SRCDIR)/kdtree.c \
               $(SRCDIR)/mesh.c \
               $(SRCDIR)/regrid.c \
+              $(SRCDIR)/projection.c \
               $(SRCDIR)/file_netcdf.c \
               $(SRCDIR)/file_mitgcm.c \
               $(SRCDIR)/colormaps.c \
@@ -273,7 +274,8 @@ $(OBJDIR)/term_render_mode.o: $(SRCDIR)/term_render_mode.c $(SRCDIR)/term_render
 $(OBJDIR)/kdtree.o: $(SRCDIR)/kdtree.c $(SRCDIR)/kdtree.h
 $(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/regrid.o: $(SRCDIR)/regrid.c $(SRCDIR)/regrid.h $(SRCDIR)/mesh.h \
-                    $(SRCDIR)/kdtree.h $(SRCDIR)/ushow.defines.h
+                    $(SRCDIR)/kdtree.h $(SRCDIR)/projection.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/projection.o: $(SRCDIR)/projection.c $(SRCDIR)/projection.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/file_netcdf.o: $(SRCDIR)/file_netcdf.c $(SRCDIR)/file_netcdf.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/file_mitgcm.o: $(SRCDIR)/file_mitgcm.c $(SRCDIR)/file_mitgcm.h $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
 $(OBJDIR)/colormaps.o: $(SRCDIR)/colormaps.c $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h

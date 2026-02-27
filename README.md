@@ -212,8 +212,12 @@ No libraries should show as "not found".
 Options:
   -m, --mesh <file>      Mesh file with coordinates (for unstructured data)
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
-  -i, --influence <m>    Influence radius in meters (default: 200000)
+  -i, --influence <m>    Influence radius in meters (default: 80000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
+  -p, --polygon-only     Skip regridding, use polygon mode only (faster)
+  --box W,E,S,N          Regional box (e.g. --box -10,30,35,70 for Europe)
+  --polar <pole>         Polar LAEA projection (north or south)
+  --cutoff <deg>         Cutoff latitude for polar view (default: 60)
   --yac                  Use YAC interpolation with default method (avg_arith)
   --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
@@ -228,12 +232,15 @@ Terminal quick-look mode:
 Options (uterm):
   -m, --mesh <file>      Mesh file with coordinates
   -r, --resolution <deg> Target grid resolution in degrees (default: 1.0)
-  -i, --influence <m>    Influence radius in meters (default: 200000)
+  -i, --influence <m>    Influence radius in meters (default: 80000)
   -d, --delay <ms>       Animation frame delay in milliseconds (default: 200)
   --chars <ramp>     ASCII ramp (default: " .:-=+*#%@")
   --render <mode>    Render mode: ascii | half | braille
   --color            Force ANSI color output
   --no-color         Disable ANSI color output
+  --box W,E,S,N      Regional box (e.g. --box -10,30,35,70)
+  --polar <pole>     Polar LAEA projection (north or south)
+  --cutoff <deg>     Cutoff latitude for polar view (default: 60)
   --yac              Use YAC interpolation (default: avg_arith)
   --yac-method <m>   Use YAC interpolation method (requires WITH_YAC=1)
   --yac-3d           Per-depth masked interpolation for 3D variables
@@ -305,6 +312,22 @@ Zarr store with consolidated metadata (faster loading):
 ./ushow output.zarr                    # Auto-detects consolidated metadata
 ```
 
+Regional box (restrict view to a geographic region):
+```bash
+./ushow data.nc --box -10,30,35,70               # Europe/Mediterranean
+./ushow data.nc --box -80,0,20,60                 # North Atlantic
+./uterm data.nc --box 120,290,-30,30 --color      # Tropical Pacific
+```
+
+Polar projections (Lambert Azimuthal Equal-Area):
+```bash
+./ushow data.nc --polar north                     # Arctic, default 60° cutoff
+./ushow data.nc --polar south                     # Antarctic, default 60° cutoff
+./ushow data.nc --polar north --cutoff 50         # Wider view (down to 50°N)
+./uterm data.nc --polar south --cutoff 70 --color # Narrow Antarctic view
+./ushow data.nc --polar north -r 0.5              # High-res polar view
+```
+
 Terminal mode examples:
 ```bash
 ./uterm temp.fesom.1964.nc -m fesom.mesh.diag.nc
@@ -329,6 +352,7 @@ The test suite includes:
 - **test_kdtree**: Spatial indexing and nearest-neighbor queries
 - **test_mesh**: Coordinate transformations (lon/lat to Cartesian)
 - **test_regrid**: Interpolation to regular grids
+- **test_projection**: LAEA projection math, regional box, and polar grid tests
 - **test_colormaps**: Color mapping functions
 - **test_term_render_mode**: Terminal render mode parsing/cycling helpers
 - **test_range_popup**: Range popup logic (symmetric computation, value parsing)
