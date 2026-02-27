@@ -22,7 +22,7 @@
 #include <math.h>
 
 /* Default scale factor for display */
-#define DEFAULT_SCALE_FACTOR 2
+#define DEFAULT_SCALE_FACTOR 1
 
 USView *view_create(void) {
     USView *view = calloc(1, sizeof(USView));
