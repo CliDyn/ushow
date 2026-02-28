@@ -29,16 +29,16 @@
 #include <string.h>
 
 /* Layout constants (like ncview's app_data) */
-#define LABEL_WIDTH      580
-#define BUTTON_WIDTH     50
-#define CBAR_WIDTH       480
-#define CBAR_HEIGHT      16
-#define CBAR_LABEL_HEIGHT 14
-#define CBAR_PAD         2
+#define LABEL_WIDTH      640
+#define BUTTON_WIDTH     58
+#define CBAR_WIDTH       540
+#define CBAR_HEIGHT      24
+#define CBAR_LABEL_HEIGHT 16
+#define CBAR_PAD         3
 #define DIM_COL_WIDTH    55
-#define NAME_COL_WIDTH   100
-#define VALUE_COL_WIDTH  95
-#define UNITS_COL_WIDTH  95
+#define NAME_COL_WIDTH   110
+#define VALUE_COL_WIDTH  105
+#define UNITS_COL_WIDTH  105
 
 /* Global X11 resources */
 static Display *display = NULL;
@@ -75,8 +75,8 @@ static Widget *varsel_boxes = NULL;    /* Array of box widgets for variable rows
 static int n_varsel_boxes = 0;
 static Widget *var_toggles = NULL;
 static int n_var_toggles = 0;
-#define VARS_PER_ROW 5
-#define VAR_BUTTON_WIDTH 65
+#define VARS_PER_ROW 7
+#define VAR_BUTTON_WIDTH 72
 
 /* Dimension info panel */
 static Widget diminfo_form = NULL;
@@ -148,6 +148,15 @@ static size_t current_n_times = 1;
 static size_t current_n_depths = 1;
 static int current_var_index = -1;
 
+/* Theme flag (0=dark, 1=light) — set before x_init via x_set_light_theme() */
+static int light_theme = 0;
+
+/* Toggle highlight colors (forward declarations) */
+static Pixel toggle_highlight_pixel;
+static Pixel toggle_normal_pixel;
+static int toggle_colors_allocated;
+static void allocate_toggle_colors(void);
+
 /* ========== Button Callbacks ========== */
 
 static void var_toggle_callback(Widget w, XtPointer client_data, XtPointer call_data) {
@@ -156,6 +165,16 @@ static void var_toggle_callback(Widget w, XtPointer client_data, XtPointer call_
     Boolean state;
     XtVaGetValues(w, XtNstate, &state, NULL);
     if (!state) return;
+
+    /* Reset old toggle, highlight new one */
+    allocate_toggle_colors();
+    if (toggle_colors_allocated && var_toggles) {
+        if (current_var_index >= 0 && current_var_index < n_var_toggles)
+            XtVaSetValues(var_toggles[current_var_index],
+                          XtNbackground, toggle_normal_pixel, NULL);
+        XtVaSetValues(w, XtNbackground, toggle_highlight_pixel, NULL);
+    }
+
     current_var_index = idx;
     if (var_select_cb) var_select_cb(idx);
 }
@@ -309,20 +328,64 @@ static void draw_colorbar(Widget w) {
     Dimension widget_w = 0, widget_h = 0;
     XtVaGetValues(w, XtNwidth, &widget_w, XtNheight, &widget_h, NULL);
 
-    /* Black background */
-    XSetForeground(display, cbar_gc, BlackPixel(display, DefaultScreen(display)));
+    int screen = DefaultScreen(display);
+    Colormap cmap = DefaultColormap(display, screen);
+    XColor xc;
+
+    /* Background */
+    if (light_theme) {
+        xc.red = 0xF0F0; xc.green = 0xF0F0; xc.blue = 0xF0F0;
+    } else {
+        xc.red = 0x2B2B; xc.green = 0x2B2B; xc.blue = 0x2B2B;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    unsigned long bg_pixel;
+    if (XAllocColor(display, cmap, &xc))
+        bg_pixel = xc.pixel;
+    else
+        bg_pixel = light_theme ? WhitePixel(display, screen) : BlackPixel(display, screen);
+
+    XSetForeground(display, cbar_gc, bg_pixel);
     XFillRectangle(display, XtWindow(w), cbar_gc, 0, 0, widget_w, widget_h);
 
-    /* Draw colorbar at top */
+    /* Draw colorbar strip */
     XPutImage(display, XtWindow(w), cbar_gc, cbar_ximage, 0, 0, 0, 0,
               cbar_width, cbar_height);
 
-    /* Draw labels below the colorbar in white */
-    XSetForeground(display, cbar_gc, WhitePixel(display, DefaultScreen(display)));
+    /* Thin border around colorbar strip */
+    if (light_theme) {
+        xc.red = 0xB0B0; xc.green = 0xB0B0; xc.blue = 0xB0B0;
+    } else {
+        xc.red = 0x5555; xc.green = 0x5555; xc.blue = 0x5555;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    unsigned long border_pixel;
+    if (XAllocColor(display, cmap, &xc))
+        border_pixel = xc.pixel;
+    else
+        border_pixel = light_theme ? BlackPixel(display, screen) : WhitePixel(display, screen);
+    XSetForeground(display, cbar_gc, border_pixel);
+    XDrawRectangle(display, XtWindow(w), cbar_gc, 0, 0,
+                   (unsigned int)cbar_width - 1, (unsigned int)cbar_height - 1);
+
+    /* Label color */
+    if (light_theme) {
+        xc.red = 0x2222; xc.green = 0x2222; xc.blue = 0x2222;
+    } else {
+        xc.red = 0xD4D4; xc.green = 0xD4D4; xc.blue = 0xD4D4;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    unsigned long label_pixel;
+    if (XAllocColor(display, cmap, &xc))
+        label_pixel = xc.pixel;
+    else
+        label_pixel = light_theme ? BlackPixel(display, screen) : WhitePixel(display, screen);
+
+    XSetForeground(display, cbar_gc, label_pixel);
     XFontStruct *font = XQueryFont(display, XGContextFromGC(cbar_gc));
     int ascent = font ? font->ascent : 10;
 
-    const int n_labels = 5;
+    const int n_labels = 7;
     for (int i = 0; i < n_labels; i++) {
         float t = (float)i / (float)(n_labels - 1);
         float val = cbar_min_val + t * (cbar_max_val - cbar_min_val);
@@ -334,6 +397,14 @@ static void draw_colorbar(Widget w) {
         if (x < 2) x = 2;
         if (x > (int)cbar_width - text_w - 2) x = (int)cbar_width - text_w - 2;
 
+        /* Tick mark from bar bottom to label area */
+        int tick_x = (int)(t * (float)(cbar_width - 1));
+        XSetForeground(display, cbar_gc, border_pixel);
+        XDrawLine(display, XtWindow(w), cbar_gc,
+                  tick_x, (int)cbar_height, tick_x, (int)cbar_height + CBAR_PAD);
+
+        /* Label text */
+        XSetForeground(display, cbar_gc, label_pixel);
         int y = (int)cbar_height + CBAR_PAD + ascent;
         XDrawString(display, XtWindow(w), cbar_gc, x, y, buf, (int)strlen(buf));
     }
@@ -372,6 +443,138 @@ static XtActionsRec actions[] = {
     {"cmap_back", cmap_back_callback},
 };
 
+void x_set_light_theme(void) { light_theme = 1; }
+int x_is_light_theme(void) { return light_theme; }
+
+/* Dark theme fallback resources */
+static String dark_resources[] = {
+    "*background:              #2B2B2B",
+    "*foreground:              #D4D4D4",
+    "*borderColor:             #555555",
+    "*borderWidth:             0",
+    "*font:                    -misc-fixed-medium-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*labelTitle.font:         -misc-fixed-bold-r-normal--15-140-75-75-c-90-iso10646-1",
+    "*labelVarname.font:       -misc-fixed-bold-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*Command.background:      #3C3C3C",
+    "*Command.foreground:      #E0E0E0",
+    "*Command.borderWidth:     1",
+    "*Command.borderColor:     #555555",
+    "*Command.internalWidth:   6",
+    "*Command.internalHeight:  3",
+    "*Toggle.background:       #3C3C3C",
+    "*Toggle.foreground:       #D4D4D4",
+    "*Toggle.borderWidth:      1",
+    "*Toggle.borderColor:      #555555",
+    "*Toggle.internalWidth:    4",
+    "*Toggle.internalHeight:   2",
+    "*Label.borderWidth:       0",
+    "*Label.internalWidth:     4",
+    "*Label.internalHeight:    2",
+    "*Scrollbar.background:    #3C3C3C",
+    "*Scrollbar.foreground:    #606060",
+    "*Scrollbar.borderWidth:   1",
+    "*Scrollbar.borderColor:   #555555",
+    "*Scrollbar.thickness:     16",
+    "*Text.background:         #1E1E1E",
+    "*Text.foreground:         #E0E0E0",
+    "*Text.borderWidth:        1",
+    "*Text.borderColor:        #606060",
+    "*Box.borderWidth:         0",
+    "*Box.hSpace:              4",
+    "*Box.vSpace:              4",
+    "*Form.borderWidth:        0",
+    "*Form.defaultDistance:     4",
+    "*separator.background:    #444444",
+    "*sectionLabel.font:       -misc-fixed-bold-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*sectionLabel.foreground: #888888",
+    NULL
+};
+
+/* Light theme fallback resources */
+static String light_resources[] = {
+    "*background:              #F0F0F0",
+    "*foreground:              #1A1A1A",
+    "*borderColor:             #B0B0B0",
+    "*borderWidth:             0",
+    "*font:                    -misc-fixed-medium-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*labelTitle.font:         -misc-fixed-bold-r-normal--15-140-75-75-c-90-iso10646-1",
+    "*labelVarname.font:       -misc-fixed-bold-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*Command.background:      #E0E0E0",
+    "*Command.foreground:      #1A1A1A",
+    "*Command.borderWidth:     1",
+    "*Command.borderColor:     #B0B0B0",
+    "*Command.internalWidth:   6",
+    "*Command.internalHeight:  3",
+    "*Toggle.background:       #E0E0E0",
+    "*Toggle.foreground:       #1A1A1A",
+    "*Toggle.borderWidth:      1",
+    "*Toggle.borderColor:      #B0B0B0",
+    "*Toggle.internalWidth:    4",
+    "*Toggle.internalHeight:   2",
+    "*Label.borderWidth:       0",
+    "*Label.internalWidth:     4",
+    "*Label.internalHeight:    2",
+    "*Scrollbar.background:    #D0D0D0",
+    "*Scrollbar.foreground:    #A0A0A0",
+    "*Scrollbar.borderWidth:   1",
+    "*Scrollbar.borderColor:   #B0B0B0",
+    "*Scrollbar.thickness:     16",
+    "*Text.background:         #FFFFFF",
+    "*Text.foreground:         #1A1A1A",
+    "*Text.borderWidth:        1",
+    "*Text.borderColor:        #B0B0B0",
+    "*Box.borderWidth:         0",
+    "*Box.hSpace:              4",
+    "*Box.vSpace:              4",
+    "*Form.borderWidth:        0",
+    "*Form.defaultDistance:     4",
+    "*separator.background:    #C0C0C0",
+    "*sectionLabel.font:       -misc-fixed-bold-r-normal--13-120-75-75-c-80-iso10646-1",
+    "*sectionLabel.foreground: #777777",
+    NULL
+};
+
+static void allocate_toggle_colors(void) {
+    if (toggle_colors_allocated || !display) return;
+    int screen = DefaultScreen(display);
+    Colormap cmap = DefaultColormap(display, screen);
+    XColor xc;
+
+    if (light_theme) {
+        /* Light theme: blue highlight, light gray normal */
+        xc.red = 0x4444; xc.green = 0x8888; xc.blue = 0xCCCC;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_highlight_pixel = xc.pixel;
+        else
+            toggle_highlight_pixel = WhitePixel(display, screen);
+
+        xc.red = 0xE0E0; xc.green = 0xE0E0; xc.blue = 0xE0E0;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_normal_pixel = xc.pixel;
+        else
+            toggle_normal_pixel = WhitePixel(display, screen);
+    } else {
+        /* Dark theme: teal highlight, dark gray normal */
+        xc.red = 0x2222; xc.green = 0x6666; xc.blue = 0x8888;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_highlight_pixel = xc.pixel;
+        else
+            toggle_highlight_pixel = BlackPixel(display, screen);
+
+        xc.red = 0x3C3C; xc.green = 0x3C3C; xc.blue = 0x3C3C;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_normal_pixel = xc.pixel;
+        else
+            toggle_normal_pixel = BlackPixel(display, screen);
+    }
+
+    toggle_colors_allocated = 1;
+}
+
 int x_init(int *argc, char **argv, const char **var_names, int n_vars,
            const USDimInfo *dims, int n_dims) {
     Widget btn;
@@ -382,7 +585,7 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         "Ushow",
         NULL, 0,
         argc, argv,
-        NULL,
+        light_theme ? light_resources : dark_resources,
         XtNtitle, "ushow",
         NULL
     );
@@ -448,12 +651,26 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
         NULL
     );
 
+    /* ===== Separator: info | animation ===== */
+    Widget sep1 = XtVaCreateManagedWidget(
+        "separator", labelWidgetClass, main_form,
+        XtNlabel, "",
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 2,
+        XtNfromVert, label_value,
+        XtNborderWidth, 0,
+        XtNinternalHeight, 0,
+        XtNinternalWidth, 0,
+        XtNresize, False,
+        NULL
+    );
+
     /* ===== Button Box 1: Animation controls ===== */
     buttonbox = XtVaCreateManagedWidget(
         "buttonbox", boxWidgetClass, main_form,
         XtNorientation, XtorientHorizontal,
-        XtNfromVert, label_value,
-        XtNwidth, 580,
+        XtNfromVert, sep1,
+        XtNwidth, LABEL_WIDTH,
         NULL
     );
 
@@ -509,18 +726,32 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     );
     XtAddCallback(depth_scrollbar, XtNjumpProc, depth_scroll_callback, NULL);
 
+    /* ===== Separator: animation | options ===== */
+    Widget sep2 = XtVaCreateManagedWidget(
+        "separator", labelWidgetClass, main_form,
+        XtNlabel, "",
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 2,
+        XtNfromVert, buttonbox,
+        XtNborderWidth, 0,
+        XtNinternalHeight, 0,
+        XtNinternalWidth, 0,
+        XtNresize, False,
+        NULL
+    );
+
     /* ===== Button Box 2: Options ===== */
     optionbox = XtVaCreateManagedWidget(
         "optionbox", boxWidgetClass, main_form,
         XtNorientation, XtorientHorizontal,
-        XtNfromVert, buttonbox,
-        XtNwidth, 580,
+        XtNfromVert, sep2,
+        XtNwidth, LABEL_WIDTH,
         NULL
     );
 
     cmap_button = XtVaCreateManagedWidget(
         "Cmap", commandWidgetClass, optionbox,
-        XtNwidth, 90,
+        XtNwidth, 100,
         XtNresize, False,
         NULL
     );
@@ -557,16 +788,30 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     XtAddCallback(btn, XtNcallback, save_callback_fn, NULL);
 
     render_mode_button = XtVaCreateManagedWidget("Interp", commandWidgetClass, optionbox,
-        XtNwidth, BUTTON_WIDTH + 10,
+        XtNwidth, 70,
         XtNresize, False,
         NULL);
     XtAddCallback(render_mode_button, XtNcallback, render_mode_callback_fn, NULL);
+
+    /* ===== Separator: options | colorbar ===== */
+    Widget sep3 = XtVaCreateManagedWidget(
+        "separator", labelWidgetClass, main_form,
+        XtNlabel, "",
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 2,
+        XtNfromVert, optionbox,
+        XtNborderWidth, 0,
+        XtNinternalHeight, 0,
+        XtNinternalWidth, 0,
+        XtNresize, False,
+        NULL
+    );
 
     /* ===== Colorbar ===== */
     colorbar_form = XtVaCreateManagedWidget(
         "colorbarForm", boxWidgetClass, main_form,
         XtNorientation, XtorientHorizontal,
-        XtNfromVert, optionbox,
+        XtNfromVert, sep3,
         XtNwidth, LABEL_WIDTH,
         NULL
     );
@@ -580,14 +825,28 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     );
 
     btn = XtVaCreateManagedWidget("Range", commandWidgetClass, colorbar_form,
-        XtNwidth, BUTTON_WIDTH + 10,
+        XtNwidth, 70,
         NULL);
     XtAddCallback(btn, XtNcallback, range_button_callback_fn, NULL);
+
+    /* ===== Separator: colorbar | variables ===== */
+    Widget sep4 = XtVaCreateManagedWidget(
+        "separator", labelWidgetClass, main_form,
+        XtNlabel, "",
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 2,
+        XtNfromVert, colorbar_form,
+        XtNborderWidth, 0,
+        XtNinternalHeight, 0,
+        XtNinternalWidth, 0,
+        XtNresize, False,
+        NULL
+    );
 
     /* ===== Variable Selector ===== */
     varsel_form = XtVaCreateManagedWidget(
         "varselForm", boxWidgetClass, main_form,
-        XtNfromVert, colorbar_form,
+        XtNfromVert, sep4,
         XtNorientation, XtorientVertical,
         XtNwidth, LABEL_WIDTH,
         XtNresizable, True,
@@ -596,10 +855,24 @@ int x_init(int *argc, char **argv, const char **var_names, int n_vars,
     /* Variable toggle buttons are created before realization */
     x_setup_var_selector(var_names, n_vars);
 
+    /* ===== Separator: variables | dimensions ===== */
+    Widget sep5 = XtVaCreateManagedWidget(
+        "separator", labelWidgetClass, main_form,
+        XtNlabel, "",
+        XtNwidth, LABEL_WIDTH,
+        XtNheight, 2,
+        XtNfromVert, varsel_form,
+        XtNborderWidth, 0,
+        XtNinternalHeight, 0,
+        XtNinternalWidth, 0,
+        XtNresize, False,
+        NULL
+    );
+
     /* ===== Dimension Info Panel ===== */
     diminfo_form = XtVaCreateManagedWidget(
         "diminfoForm", boxWidgetClass, main_form,
-        XtNfromVert, varsel_form,
+        XtNfromVert, sep5,
         XtNorientation, XtorientVertical,
         XtNwidth, LABEL_WIDTH,
         XtNresizable, True,
@@ -829,6 +1102,12 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
     /* Handle single variable case - needs to be its own radio group */
     if (n_vars == 1) {
         XtVaSetValues(var_toggles[0], XtNradioGroup, var_toggles[0], NULL);
+    }
+
+    /* Highlight initial active variable */
+    allocate_toggle_colors();
+    if (toggle_colors_allocated && n_vars > 0) {
+        XtVaSetValues(var_toggles[0], XtNbackground, toggle_highlight_pixel, NULL);
     }
 
     current_var_index = 0;

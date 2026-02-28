@@ -872,6 +872,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         conserv1, conserv2\n");
     fprintf(stderr, "      --yac-3d           Per-depth masked interpolation for 3D variables\n");
 #endif
+    fprintf(stderr, "      --light            Use light theme (default: dark)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
@@ -900,6 +901,7 @@ int main(int argc, char *argv[]) {
         {"yac-method",   required_argument, 0, 1100},
         {"yac-3d",       no_argument,       0, 1101},
 #endif
+        {"light",        no_argument,       0, 1300},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -968,6 +970,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 1202:
                 options.target_config.cutoff_lat = atof(optarg);
+                break;
+            case 1300:
+                x_set_light_theme();
                 break;
             case 'h':
             default:

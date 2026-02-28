@@ -20,7 +20,7 @@
 #include <string.h>
 #include <math.h>
 
-#define MINMAX_TEXT_WIDTH 120
+#define MINMAX_TEXT_WIDTH 160
 
 /* X11 handles (passed during init) */
 static Display *popup_display = NULL;
@@ -115,7 +115,7 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     range_min_label = XtVaCreateManagedWidget(
         "range_min_label", labelWidgetClass, range_form,
         XtNlabel, "Minimum:",
-        XtNwidth, 80,
+        XtNwidth, 90,
         XtNborderWidth, 0,
         NULL);
 
@@ -130,7 +130,7 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     range_max_label = XtVaCreateManagedWidget(
         "range_max_label", labelWidgetClass, range_form,
         XtNlabel, "Maximum:",
-        XtNwidth, 80,
+        XtNwidth, 90,
         XtNborderWidth, 0,
         XtNfromVert, range_min_label,
         NULL);
@@ -147,6 +147,7 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     range_symmetric_btn = XtVaCreateManagedWidget(
         "Symmetric about Zero", commandWidgetClass, range_form,
         XtNfromVert, range_max_label,
+        XtNvertDistance, 8,
         NULL);
     XtAddCallback(range_symmetric_btn, XtNcallback, symmetric_callback, NULL);
 
@@ -154,6 +155,7 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     range_reset_btn = XtVaCreateManagedWidget(
         "Reset to Global Values", commandWidgetClass, range_form,
         XtNfromVert, range_symmetric_btn,
+        XtNvertDistance, 8,
         NULL);
     XtAddCallback(range_reset_btn, XtNcallback, reset_global_callback, NULL);
 
@@ -170,6 +172,8 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     range_ok_btn = XtVaCreateManagedWidget(
         "OK", commandWidgetClass, range_form,
         XtNfromVert, range_reset_btn,
+        XtNvertDistance, 12,
+        XtNwidth, 80,
         NULL);
     XtAddCallback(range_ok_btn, XtNcallback, ok_callback, NULL);
 
@@ -177,6 +181,9 @@ void range_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
         "Cancel", commandWidgetClass, range_form,
         XtNfromHoriz, range_ok_btn,
         XtNfromVert, range_reset_btn,
+        XtNvertDistance, 12,
+        XtNhorizDistance, 8,
+        XtNwidth, 80,
         NULL);
     XtAddCallback(range_cancel_btn, XtNcallback, cancel_callback, NULL);
 }

@@ -8,6 +8,17 @@
 #include "../ushow.defines.h"
 
 /*
+ * Set light theme (call before x_init). Default is dark theme.
+ */
+void x_set_light_theme(void);
+
+/*
+ * Query current theme (for use by sub-components like timeseries popup).
+ * Returns 1 if light theme, 0 if dark theme.
+ */
+int x_is_light_theme(void);
+
+/*
  * Initialize X11 display.
  * Returns 0 on success, -1 on failure.
  */
