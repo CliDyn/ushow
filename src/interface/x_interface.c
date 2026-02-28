@@ -17,7 +17,6 @@
 #include <X11/Xaw/Form.h>
 #include <X11/Xaw/Box.h>
 #include <X11/Xaw/Command.h>
-#include <X11/Xaw/Toggle.h>
 #include <X11/Xaw/Label.h>
 #include <X11/Xaw/Scrollbar.h>
 #include <X11/Xaw/Viewport.h>
@@ -152,8 +151,10 @@ static int current_var_index = -1;
 static int light_theme = 0;
 
 /* Toggle highlight colors (forward declarations) */
-static Pixel toggle_highlight_pixel;
-static Pixel toggle_normal_pixel;
+static Pixel toggle_highlight_bg_pixel;
+static Pixel toggle_highlight_fg_pixel;
+static Pixel toggle_normal_bg_pixel;
+static Pixel toggle_normal_fg_pixel;
 static int toggle_colors_allocated;
 static void allocate_toggle_colors(void);
 
@@ -162,17 +163,19 @@ static void allocate_toggle_colors(void);
 static void var_toggle_callback(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)call_data;
     int idx = (int)(intptr_t)client_data;
-    Boolean state;
-    XtVaGetValues(w, XtNstate, &state, NULL);
-    if (!state) return;
 
-    /* Reset old toggle, highlight new one */
+    if (idx == current_var_index) return;
+
+    /* Reset old button, highlight new one */
     allocate_toggle_colors();
     if (toggle_colors_allocated && var_toggles) {
         if (current_var_index >= 0 && current_var_index < n_var_toggles)
             XtVaSetValues(var_toggles[current_var_index],
-                          XtNbackground, toggle_normal_pixel, NULL);
-        XtVaSetValues(w, XtNbackground, toggle_highlight_pixel, NULL);
+                          XtNbackground, toggle_normal_bg_pixel,
+                          XtNforeground, toggle_normal_fg_pixel, NULL);
+        XtVaSetValues(var_toggles[idx],
+                      XtNbackground, toggle_highlight_bg_pixel,
+                      XtNforeground, toggle_highlight_fg_pixel, NULL);
     }
 
     current_var_index = idx;
@@ -541,35 +544,65 @@ static void allocate_toggle_colors(void) {
     XColor xc;
 
     if (light_theme) {
-        /* Light theme: blue highlight, light gray normal */
+        /* Light theme highlight: blue bg, white text */
         xc.red = 0x4444; xc.green = 0x8888; xc.blue = 0xCCCC;
         xc.flags = DoRed | DoGreen | DoBlue;
         if (XAllocColor(display, cmap, &xc))
-            toggle_highlight_pixel = xc.pixel;
+            toggle_highlight_bg_pixel = xc.pixel;
         else
-            toggle_highlight_pixel = WhitePixel(display, screen);
+            toggle_highlight_bg_pixel = BlackPixel(display, screen);
 
+        xc.red = 0xFFFF; xc.green = 0xFFFF; xc.blue = 0xFFFF;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_highlight_fg_pixel = xc.pixel;
+        else
+            toggle_highlight_fg_pixel = WhitePixel(display, screen);
+
+        /* Light theme normal: light gray bg, dark text */
         xc.red = 0xE0E0; xc.green = 0xE0E0; xc.blue = 0xE0E0;
         xc.flags = DoRed | DoGreen | DoBlue;
         if (XAllocColor(display, cmap, &xc))
-            toggle_normal_pixel = xc.pixel;
+            toggle_normal_bg_pixel = xc.pixel;
         else
-            toggle_normal_pixel = WhitePixel(display, screen);
+            toggle_normal_bg_pixel = WhitePixel(display, screen);
+
+        xc.red = 0x1A1A; xc.green = 0x1A1A; xc.blue = 0x1A1A;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_normal_fg_pixel = xc.pixel;
+        else
+            toggle_normal_fg_pixel = BlackPixel(display, screen);
     } else {
-        /* Dark theme: teal highlight, dark gray normal */
+        /* Dark theme highlight: teal bg, white text */
         xc.red = 0x2222; xc.green = 0x6666; xc.blue = 0x8888;
         xc.flags = DoRed | DoGreen | DoBlue;
         if (XAllocColor(display, cmap, &xc))
-            toggle_highlight_pixel = xc.pixel;
+            toggle_highlight_bg_pixel = xc.pixel;
         else
-            toggle_highlight_pixel = BlackPixel(display, screen);
+            toggle_highlight_bg_pixel = BlackPixel(display, screen);
 
+        xc.red = 0xFFFF; xc.green = 0xFFFF; xc.blue = 0xFFFF;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_highlight_fg_pixel = xc.pixel;
+        else
+            toggle_highlight_fg_pixel = WhitePixel(display, screen);
+
+        /* Dark theme normal: dark gray bg, light gray text */
         xc.red = 0x3C3C; xc.green = 0x3C3C; xc.blue = 0x3C3C;
         xc.flags = DoRed | DoGreen | DoBlue;
         if (XAllocColor(display, cmap, &xc))
-            toggle_normal_pixel = xc.pixel;
+            toggle_normal_bg_pixel = xc.pixel;
         else
-            toggle_normal_pixel = BlackPixel(display, screen);
+            toggle_normal_bg_pixel = BlackPixel(display, screen);
+
+        xc.red = 0xD4D4; xc.green = 0xD4D4; xc.blue = 0xD4D4;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(display, cmap, &xc))
+            toggle_normal_fg_pixel = xc.pixel;
+        else
+            toggle_normal_fg_pixel = WhitePixel(display, screen);
     }
 
     toggle_colors_allocated = 1;
@@ -1053,7 +1086,7 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
     varsel_boxes = malloc(num_boxes * sizeof(Widget));
     n_varsel_boxes = num_boxes;
 
-    /* Create toggle buttons in radio group, arranged in rows */
+    /* Create variable buttons arranged in rows */
     var_toggles = malloc(n_vars * sizeof(Widget));
     n_var_toggles = n_vars;
 
@@ -1084,30 +1117,24 @@ void x_setup_var_selector(const char **var_names, int n_vars) {
             }
         }
 
-        /* Create toggle button */
+        /* Create command button (not toggle - avoids reverse-video issues) */
         var_toggles[i] = XtVaCreateManagedWidget(
             var_names[i],
-            toggleWidgetClass,
+            commandWidgetClass,
             varsel_boxes[current_box],
             XtNlabel, var_names[i],
             XtNwidth, VAR_BUTTON_WIDTH,
-            XtNstate, (i == 0) ? True : False,
-            XtNradioGroup, (i > 0) ? var_toggles[0] : NULL,
             NULL
         );
         XtAddCallback(var_toggles[i], XtNcallback, var_toggle_callback,
                       (XtPointer)(intptr_t)i);
     }
 
-    /* Handle single variable case - needs to be its own radio group */
-    if (n_vars == 1) {
-        XtVaSetValues(var_toggles[0], XtNradioGroup, var_toggles[0], NULL);
-    }
-
     /* Highlight initial active variable */
     allocate_toggle_colors();
     if (toggle_colors_allocated && n_vars > 0) {
-        XtVaSetValues(var_toggles[0], XtNbackground, toggle_highlight_pixel, NULL);
+        XtVaSetValues(var_toggles[0], XtNbackground, toggle_highlight_bg_pixel,
+                                      XtNforeground, toggle_highlight_fg_pixel, NULL);
     }
 
     current_var_index = 0;
