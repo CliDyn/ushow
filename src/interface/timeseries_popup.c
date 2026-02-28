@@ -6,6 +6,7 @@
  */
 
 #include "timeseries_popup.h"
+#include "x_interface.h"
 #include <X11/Xlib.h>
 #include <X11/StringDefs.h>
 #include <X11/Shell.h>
@@ -38,6 +39,9 @@ static GC ts_gc = None;
 /* Colors */
 static unsigned long color_blue = 0;
 static unsigned long color_gray = 0;
+static unsigned long color_bg = 0;
+static unsigned long color_axis = 0;
+static unsigned long color_label = 0;
 static int colors_allocated = 0;
 
 /* Cached data (deep copy) */
@@ -177,24 +181,67 @@ static void allocate_colors(void) {
     int screen = DefaultScreen(ts_display);
     Colormap cmap = DefaultColormap(ts_display, screen);
     XColor xc;
+    int is_light = x_is_light_theme();
 
     /* Blue for data line */
-    xc.red = 0x3333; xc.green = 0x6666; xc.blue = 0xFFFF;
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc)) {
-        color_blue = xc.pixel;
+    if (is_light) {
+        xc.red = 0x2222; xc.green = 0x5555; xc.blue = 0xCCCC;
     } else {
-        color_blue = BlackPixel(ts_display, screen);
+        xc.red = 0x5555; xc.green = 0x9999; xc.blue = 0xFFFF;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(ts_display, cmap, &xc))
+        color_blue = xc.pixel;
+    else
+        color_blue = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
+
+    /* Grid lines */
+    if (is_light) {
+        xc.red = 0xCCCC; xc.green = 0xCCCC; xc.blue = 0xCCCC;
+    } else {
+        xc.red = 0x4444; xc.green = 0x4444; xc.blue = 0x4444;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(ts_display, cmap, &xc))
+        color_gray = xc.pixel;
+    else
+        color_gray = is_light ? WhitePixel(ts_display, screen) : BlackPixel(ts_display, screen);
+
+    /* Background */
+    if (is_light) {
+        color_bg = WhitePixel(ts_display, screen);
+    } else {
+        xc.red = 0x1E1E; xc.green = 0x1E1E; xc.blue = 0x1E1E;
+        xc.flags = DoRed | DoGreen | DoBlue;
+        if (XAllocColor(ts_display, cmap, &xc))
+            color_bg = xc.pixel;
+        else
+            color_bg = BlackPixel(ts_display, screen);
     }
 
-    /* Light gray for grid */
-    xc.red = 0xCCCC; xc.green = 0xCCCC; xc.blue = 0xCCCC;
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc)) {
-        color_gray = xc.pixel;
+    /* Axis color */
+    if (is_light) {
+        xc.red = 0x4444; xc.green = 0x4444; xc.blue = 0x4444;
     } else {
-        color_gray = WhitePixel(ts_display, screen);
+        xc.red = 0x8888; xc.green = 0x8888; xc.blue = 0x8888;
     }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(ts_display, cmap, &xc))
+        color_axis = xc.pixel;
+    else
+        color_axis = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
+
+    /* Label color */
+    if (is_light) {
+        xc.red = 0x2222; xc.green = 0x2222; xc.blue = 0x2222;
+    } else {
+        xc.red = 0xCCCC; xc.green = 0xCCCC; xc.blue = 0xCCCC;
+    }
+    xc.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(ts_display, cmap, &xc))
+        color_label = xc.pixel;
+    else
+        color_label = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
 
     colors_allocated = 1;
 }
@@ -206,9 +253,6 @@ static void draw_plot(Widget w) {
     if (!XtIsRealized(w)) return;
 
     Window win = XtWindow(w);
-    int screen = DefaultScreen(ts_display);
-    unsigned long black = BlackPixel(ts_display, screen);
-    unsigned long white = WhitePixel(ts_display, screen);
 
     allocate_colors();
 
@@ -220,8 +264,8 @@ static void draw_plot(Widget w) {
     int plot_w = plot_x1 - plot_x0;
     int plot_h = plot_y1 - plot_y0;
 
-    /* White background */
-    XSetForeground(ts_display, ts_gc, white);
+    /* Dark background */
+    XSetForeground(ts_display, ts_gc, color_bg);
     XFillRectangle(ts_display, win, ts_gc, 0, 0, PLOT_WIDTH, PLOT_HEIGHT);
 
     /* Compute data range for Y axis (valid values only) */
@@ -287,11 +331,12 @@ static void draw_plot(Widget w) {
         }
     }
 
-    /* Draw axes (black) */
-    XSetForeground(ts_display, ts_gc, black);
+    /* Draw axes (gray) */
+    XSetForeground(ts_display, ts_gc, color_axis);
     XDrawRectangle(ts_display, win, ts_gc, plot_x0, plot_y0, plot_w, plot_h);
 
     /* Y-axis tick labels */
+    XSetForeground(ts_display, ts_gc, color_label);
     XFontStruct *font = XQueryFont(ts_display, XGContextFromGC(ts_gc));
     int font_ascent = font ? font->ascent : 10;
 
@@ -302,9 +347,11 @@ static void draw_plot(Widget w) {
         if (py < plot_y0 || py > plot_y1) continue;
 
         /* Tick mark */
+        XSetForeground(ts_display, ts_gc, color_axis);
         XDrawLine(ts_display, win, ts_gc, plot_x0 - TICK_LEN, py, plot_x0, py);
 
         /* Label */
+        XSetForeground(ts_display, ts_gc, color_label);
         char buf[32];
         snprintf(buf, sizeof(buf), "%.4g", val);
         int tw = font ? XTextWidth(font, buf, (int)strlen(buf)) : 40;
@@ -321,9 +368,11 @@ static void draw_plot(Widget w) {
         if (px < plot_x0 || px > plot_x1) continue;
 
         /* Tick mark */
+        XSetForeground(ts_display, ts_gc, color_axis);
         XDrawLine(ts_display, win, ts_gc, px, plot_y1, px, plot_y1 + TICK_LEN);
 
         /* Label */
+        XSetForeground(ts_display, ts_gc, color_label);
         char buf[32];
         if (use_cf_time) {
             if (!ts_format_time(buf, sizeof(buf), val, ts_cache.x_label))
@@ -405,7 +454,7 @@ static void draw_plot(Widget w) {
 
     /* Reset line width */
     XSetLineAttributes(ts_display, ts_gc, 0, LineSolid, CapButt, JoinMiter);
-    XSetForeground(ts_display, ts_gc, black);
+    XSetForeground(ts_display, ts_gc, color_label);
 
     if (font) {
         XFreeFontInfo(NULL, font, 1);

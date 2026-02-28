@@ -12,7 +12,7 @@ A fast, ncview‑inspired visualization tool for structured and unstructured geo
 - **Multiple formats**: Supports netCDF, zarr, GRIB, and MITgcm binary (MDS)
 - **Unified data handling**: Treats all data as collections of points with lon/lat coordinates
 - **Fast visualization**: KDTree-based nearest-neighbor interpolation to regular grid
-- **X11/Xaw interface**: Works over SSH with X forwarding
+- **X11/Xaw interface**: Works over SSH with X forwarding, dark/light theme
 - **Terminal quick-look mode**: Separate `uterm` binary with raw terminal interaction (no X is needed)
 - **Animation support**: Step through time dimensions
 - **Multiple colormaps**: viridis, hot, grayscale, plus the full cmocean set
@@ -256,6 +256,7 @@ Options:
   --box W,E,S,N          Regional box (e.g. --box -10,30,35,70 for Europe)
   --polar <pole>         Polar LAEA projection (north or south)
   --cutoff <deg>         Cutoff latitude for polar view (default: 60)
+  --light                Use light theme (default: dark)
   --yac                  Use YAC interpolation with default method (avg_arith)
   --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
