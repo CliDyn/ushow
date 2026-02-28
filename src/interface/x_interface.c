@@ -8,6 +8,7 @@
 
 #include "x_interface.h"
 #include "colorbar.h"
+#include "../colormaps.h"
 #include "range_popup.h"
 #include "timeseries_popup.h"
 #include <X11/Xlib.h>
@@ -1459,6 +1460,20 @@ void x_update_value_label(double lon, double lat, float value) {
 void x_update_colorbar(float min_val, float max_val, size_t width) {
     (void)width;
     if (!display || !colorbar_widget) return;
+
+    /* Skip rebuild if nothing changed (avoids flicker during animation) */
+    USColormap *cur_cmap = colormap_get_current();
+    static USColormap *prev_cmap = NULL;
+    static float prev_min = 0.0f, prev_max = 0.0f;
+    static int prev_valid = 0;
+    if (prev_valid && min_val == prev_min && max_val == prev_max
+        && cur_cmap == prev_cmap) {
+        return;
+    }
+    prev_min = min_val;
+    prev_max = max_val;
+    prev_cmap = cur_cmap;
+    prev_valid = 1;
 
     cbar_min_val = min_val;
     cbar_max_val = max_val;
