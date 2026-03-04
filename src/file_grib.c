@@ -286,12 +286,55 @@ USFile *grib_open(const char *filename) {
     gfile->fp = fp;
     gfile->path = strdup(filename);
 
+    /* Scan GRIB messages manually by iterating through file */
+    int capacity = 64;
+    off_t *offsets = malloc(capacity * sizeof(off_t));
+    size_t *sizes = malloc(capacity * sizeof(size_t));
+    if (!offsets || !sizes) {
+        free(offsets);
+        free(sizes);
+        free(gfile->path);
+        free(gfile);
+        fclose(fp);
+        return NULL;
+    }
+
     int num = 0;
-    off_t *offsets = NULL;
-    size_t *sizes = NULL;
-    int rc = codes_extract_offsets_sizes_malloc(NULL, filename, PRODUCT_GRIB, &offsets, &sizes, &num, 0);
-    if (rc != CODES_SUCCESS || num <= 0) {
-        fprintf(stderr, "Failed to scan GRIB messages in %s\n", filename);
+    int err = 0;
+    codes_handle *h = NULL;
+    
+    rewind(fp);
+    while ((h = codes_handle_new_from_file(NULL, fp, PRODUCT_GRIB, &err)) != NULL) {
+        if (num >= capacity) {
+            capacity *= 2;
+            off_t *new_offsets = realloc(offsets, capacity * sizeof(off_t));
+            size_t *new_sizes = realloc(sizes, capacity * sizeof(size_t));
+            if (!new_offsets || !new_sizes) {
+                free(new_offsets ? new_offsets : offsets);
+                free(new_sizes ? new_sizes : sizes);
+                codes_handle_delete(h);
+                free(gfile->path);
+                free(gfile);
+                fclose(fp);
+                return NULL;
+            }
+            offsets = new_offsets;
+            sizes = new_sizes;
+        }
+        
+        /* Get message offset and size */
+        off_t msg_offset = 0;
+        size_t msg_size = 0;
+        codes_get_message_offset(h, &msg_offset);
+        codes_get_message_size(h, &msg_size);
+        offsets[num] = msg_offset;
+        sizes[num] = msg_size;
+        num++;
+        codes_handle_delete(h);
+    }
+
+    if (num <= 0) {
+        fprintf(stderr, "No GRIB messages found in %s\n", filename);
         free(offsets);
         free(sizes);
         free(gfile->path);
@@ -675,9 +718,15 @@ static USVar *build_var_from_group(USFile *file, USMesh *mesh, const GribVarGrou
         var->n_dims++;
     }
 
-    if (is_multi_level) {
+    /* Always add depth dimension for GRIB to show level info */
+    if (group->n_levels > 0) {
         var->depth_dim_id = var->n_dims;
-        strncpy(var->dim_names[var->n_dims], GRIB_DEPTH_DIM_NAME, MAX_NAME_LEN - 1);
+        /* Use type_of_level as dimension name (e.g., "surface", "depthBelowLandLayer") */
+        if (group->type_of_level[0]) {
+            strncpy(var->dim_names[var->n_dims], group->type_of_level, MAX_NAME_LEN - 1);
+        } else {
+            strncpy(var->dim_names[var->n_dims], GRIB_DEPTH_DIM_NAME, MAX_NAME_LEN - 1);
+        }
         var->dim_sizes[var->n_dims] = group->n_levels;
         var->n_dims++;
     }
@@ -806,20 +855,10 @@ USVar *grib_scan_variables(USFile *file, USMesh *mesh) {
         free(infos);
 
         int is_multi_level = (group->n_levels > 1);
-        char name_buf[MAX_NAME_LEN] = {0};
-        if (!is_multi_level) {
-            long level = (group->n_levels > 0) ? (long)group->levels[0] : 0;
-            if (group->type_of_level[0]) {
-                snprintf(name_buf, sizeof(name_buf), "%s@%s=%ld",
-                         group->short_name, group->type_of_level, level);
-            } else {
-                snprintf(name_buf, sizeof(name_buf), "%s@level=%ld",
-                         group->short_name, level);
-            }
-        }
 
+        /* Always use short_name as variable name, show level in depth */
         USVar *var = build_var_from_group(file, mesh, group,
-                                          is_multi_level ? NULL : name_buf,
+                                          NULL,  /* use short_name */
                                           is_multi_level);
         if (!var) continue;
 

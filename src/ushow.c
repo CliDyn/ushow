@@ -86,8 +86,9 @@ static void on_var_select(int var_index) {
     current_var = var;
     view_set_variable(view, var, mesh, regrid);
 
-    /* Update UI */
-    x_update_var_name(var->name);
+    /* Update UI - use long_name if available, otherwise name */
+    const char *display_name = (var->long_name[0]) ? var->long_name : var->name;
+    x_update_var_name(display_name);
     x_update_range_label(var->user_min, var->user_max);
     x_update_time(view->time_index, view->n_times);
     x_update_depth(view->depth_index, view->n_depths);
