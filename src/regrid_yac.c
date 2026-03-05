@@ -23,6 +23,10 @@
 /* YAXT must be initialized before YAC grid operations */
 #include <xt/xt_core.h>
 
+/* Grid name constants used when registering source/target grids with YAC */
+#define YAC_SOURCE_GRID_NAME "source"
+#define YAC_TARGET_GRID_NAME "target"
+
 /* Store YAC interpolation object for execute-based apply */
 struct USYacRegrid {
     size_t target_nx, target_ny;
@@ -155,7 +159,7 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
         size_t nbr_vertices[2] = {mesh->orig_nx, mesh->orig_ny};
         int cyclic[2] = {0, 0};
         return yac_basic_grid_curve_2d_deg_new(
-            "source", nbr_vertices, cyclic, mesh->lon, mesh->lat);
+            YAC_SOURCE_GRID_NAME, nbr_vertices, cyclic, mesh->lon, mesh->lat);
     }
 
     /* If connectivity information is available */
@@ -168,7 +172,7 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
         }
 
         struct yac_basic_grid *grid = yac_basic_grid_unstruct_deg_new(
-            "source",
+            YAC_SOURCE_GRID_NAME,
             mesh->n_points,
             mesh->n_elements,
             num_verts_per_cell,
@@ -181,7 +185,7 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
     } else {
         /* Point cloud (e.g. HEALPix, or unstructured without connectivity) */
         return yac_basic_grid_cloud_deg_new(
-            "source",
+            YAC_SOURCE_GRID_NAME,
             mesh->n_points,
             mesh->lon,
             mesh->lat);
@@ -233,7 +237,7 @@ static struct yac_basic_grid *build_target_grid(
         int cyclic[2] = {0, 0};
 
         struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
-            "target", nbr_vertices, cyclic, lon_verts, lat_verts);
+            YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, lon_verts, lat_verts);
 
         free(lon_verts);
         free(lat_verts);
@@ -305,7 +309,7 @@ static struct yac_basic_grid *build_target_grid(
     size_t nbr_vertices[2] = {nvx, nvy};
     int cyclic[2] = {0, 0};
     struct yac_basic_grid *grid = yac_basic_grid_curve_2d_deg_new(
-        "target", nbr_vertices, cyclic, vert_lon, vert_lat);
+        YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, vert_lon, vert_lat);
 
     free(vert_lon);
     free(vert_lat);
@@ -456,7 +460,8 @@ build_interpolation(USMesh *mesh, USYacMethod method,
     };
 
     struct yac_interp_grid *interp_grid = yac_interp_grid_new(
-        grid_pair, "source", "target", 1, &src_field, tgt_field);
+        grid_pair, YAC_SOURCE_GRID_NAME, YAC_TARGET_GRID_NAME, 1,
+        &src_field, tgt_field);
     if (!interp_grid) {
         yac_dist_grid_pair_delete(grid_pair);
         yac_basic_grid_delete(src_grid);
@@ -612,7 +617,8 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     };
 
     struct yac_interp_grid *interp_grid = yac_interp_grid_new(
-        grid_pair, "source", "target", 1, &src_field, tgt_field);
+        grid_pair, YAC_SOURCE_GRID_NAME, YAC_TARGET_GRID_NAME, 1,
+        &src_field, tgt_field);
     if (!interp_grid) {
         fprintf(stderr, "YAC: Failed to create interp grid\n");
         yac_dist_grid_pair_delete(grid_pair);
