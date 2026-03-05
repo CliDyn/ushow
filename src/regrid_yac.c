@@ -54,6 +54,7 @@ struct USYacRegrid {
 };
 
 static int mpi_initialized_by_us = 0;
+static int yaxt_initialized_by_us = 0;
 
 static double get_time_seconds(void) {
     struct timeval tv;
@@ -74,13 +75,15 @@ int yac_regrid_init(void) {
     /* YAXT must be initialized before any YAC grid operations */
     if (!xt_initialized()) {
         xt_initialize(MPI_COMM_WORLD);
+        yaxt_initialized_by_us = 1;
     }
     return 0;
 }
 
 void yac_regrid_finalize(void) {
-    if (xt_initialized()) {
+    if (yaxt_initialized_by_us && xt_initialized()) {
         xt_finalize();
+        yaxt_initialized_by_us = 0;
     }
     if (mpi_initialized_by_us) {
         int finalized = 0;
