@@ -188,16 +188,6 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
     }
 }
 
-/* Convert lon/lat (degrees) to 3D Cartesian on unit sphere */
-static void lonlat_deg_to_xyz(double lon_deg, double lat_deg, double xyz[3]) {
-    double lon_rad = lon_deg * M_PI / 180.0;
-    double lat_rad = lat_deg * M_PI / 180.0;
-    double cos_lat = cos(lat_rad);
-    xyz[0] = cos_lat * cos(lon_rad);
-    xyz[1] = cos_lat * sin(lon_rad);
-    xyz[2] = sin(lat_rad);
-}
-
 /* Build target grid (equirectangular or LAEA polar) */
 static struct yac_basic_grid *build_target_grid(
     double resolution, const USTargetConfig *config,
@@ -256,8 +246,10 @@ static struct yac_basic_grid *build_target_grid(
                 double lat_center = lat_min + (j + 0.5) * dlat;
                 for (size_t i = 0; i < nx; i++) {
                     double lon_center = lon_min + (i + 0.5) * dlon;
-                    lonlat_deg_to_xyz(lon_center, lat_center,
-                                      cell_coords[j * nx + i]);
+                    lonlat_to_cartesian(lon_center, lat_center,
+                                       &cell_coords[j * nx + i][0],
+                                       &cell_coords[j * nx + i][1],
+                                       &cell_coords[j * nx + i][2]);
                 }
             }
             yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
@@ -328,10 +320,16 @@ static struct yac_basic_grid *build_target_grid(
                 double px = -extent + (i + 0.5) * dx;
                 double lo, la;
                 if (laea_inverse(px, py, pole, R, &lo, &la) == 0) {
-                    lonlat_deg_to_xyz(lo, la, cell_coords[j * n + i]);
+                    lonlat_to_cartesian(lo, la,
+                                       &cell_coords[j * n + i][0],
+                                       &cell_coords[j * n + i][1],
+                                       &cell_coords[j * n + i][2]);
                 } else {
-                    lonlat_deg_to_xyz(0.0, (pole > 0) ? 90.0 : -90.0,
-                                      cell_coords[j * n + i]);
+                    double pole_lat = (pole > 0) ? 90.0 : -90.0;
+                    lonlat_to_cartesian(0.0, pole_lat,
+                                       &cell_coords[j * n + i][0],
+                                       &cell_coords[j * n + i][1],
+                                       &cell_coords[j * n + i][2]);
                 }
             }
         }
