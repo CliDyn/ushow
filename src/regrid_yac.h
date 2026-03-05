@@ -61,7 +61,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
  * fill: fill value for missing/invalid data
  * dst: output data [target_ny * target_nx], must be preallocated
  */
-void yac_regrid_apply(const USYacRegrid *r, const float *src, float fill, float *dst);
+void yac_regrid_apply(USYacRegrid *r, const float *src, float fill, float *dst);
 
 /*
  * Get target grid dimensions.

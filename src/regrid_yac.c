@@ -669,34 +669,16 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
         return NULL;
     }
 
-    /* 6. Create interpolation object (handles data redistribution + weight apply) */
-    struct yac_interpolation *interp = yac_interp_weights_get_interpolation(
-        weights,
-        YAC_MAPPING_ON_TGT,       /* apply weights on target side */
-        1,                         /* collection_size */
-        YAC_FRAC_MASK_NO_VALUE,   /* disable fractional masking */
-        1.0,                       /* scaling_factor */
-        0.0,                       /* scaling_summand */
-        NULL,                      /* yaxt_exchanger_name */
-        1,                         /* is_source */
-        1                          /* is_target */
-    );
-
-    /* 7. Cleanup intermediates (weights kept in struct for reuse) */
+    /* 6. Cleanup intermediates (weights kept in struct for lazy interp creation) */
     yac_interp_grid_delete(interp_grid);
     yac_dist_grid_pair_delete(grid_pair);
     yac_basic_grid_delete(src_grid);
     yac_basic_grid_delete(tgt_grid);
 
-    if (!interp) {
-        fprintf(stderr, "YAC: Failed to create interpolation object\n");
-        return NULL;
-    }
-
-    /* 8. Allocate result struct */
+    /* 7. Allocate result struct (interp created lazily on first apply) */
     USYacRegrid *r = calloc(1, sizeof(USYacRegrid));
     if (!r) {
-        yac_interpolation_delete(interp);
+        yac_interp_weights_delete(weights);
         return NULL;
     }
 
@@ -706,7 +688,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     r->resolution = resolution;
     r->n_src_points = mesh->n_points;
     r->n_tgt_points = nx * ny;
-    r->interp = interp;
+    r->interp = NULL;  /* created lazily on first apply */
     r->weights = weights;
     r->projection = config->projection;
     r->laea_R = EARTH_RADIUS_M;
@@ -742,8 +724,20 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     return r;
 }
 
-void yac_regrid_apply(const USYacRegrid *r, const float *src, float fill, float *dst) {
-    if (!r || !src || !dst || !r->interp) return;
+void yac_regrid_apply(USYacRegrid *r, const float *src, float fill, float *dst) {
+    if (!r || !src || !dst || !r->weights) return;
+
+    /* Lazy-create interpolation object on first call */
+    if (!r->interp) {
+        r->interp = yac_interp_weights_get_interpolation(
+            r->weights,
+            YAC_MAPPING_ON_TGT, 1, YAC_FRAC_MASK_NO_VALUE,
+            1.0, 0.0, NULL, 1, 1);
+        if (!r->interp) {
+            fprintf(stderr, "YAC: Failed to create interpolation object\n");
+            return;
+        }
+    }
 
     size_t n_src = r->n_src_points;
     size_t n_tgt = r->n_tgt_points;
