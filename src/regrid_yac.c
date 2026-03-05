@@ -39,6 +39,9 @@ struct USYacRegrid {
     /* YAC interpolation object (handles redistribution + weight apply) */
     struct yac_interpolation *interp;
 
+    /* YAC interpolation weights (retained for reuse / inspection) */
+    struct yac_interp_weights *weights;
+
     /* Temporary double buffers for float<->double conversion */
     double *src_buf;   /* [n_src_points] */
     double *tgt_buf;   /* [n_tgt_points] */
@@ -679,8 +682,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
         1                          /* is_target */
     );
 
-    /* 7. Cleanup intermediates (interpolation object is self-contained) */
-    yac_interp_weights_delete(weights);
+    /* 7. Cleanup intermediates (weights kept in struct for reuse) */
     yac_interp_grid_delete(interp_grid);
     yac_dist_grid_pair_delete(grid_pair);
     yac_basic_grid_delete(src_grid);
@@ -705,6 +707,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     r->n_src_points = mesh->n_points;
     r->n_tgt_points = nx * ny;
     r->interp = interp;
+    r->weights = weights;
     r->projection = config->projection;
     r->laea_R = EARTH_RADIUS_M;
     r->config = *config;
@@ -918,6 +921,7 @@ void yac_regrid_free(USYacRegrid *r) {
     if (!r) return;
     yac_regrid_clear_depth_cache(r);
     if (r->interp) yac_interpolation_delete(r->interp);
+    if (r->weights) yac_interp_weights_delete(r->weights);
     free(r->src_buf);
     free(r->tgt_buf);
     free(r);
