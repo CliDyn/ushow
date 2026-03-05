@@ -158,28 +158,9 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
             "source", nbr_vertices, cyclic, mesh->lon, mesh->lat);
     }
 
-    if (mesh->n_elements > 0 && mesh->elem_nodes != NULL &&
-        yac_method_needs_connectivity(method)) {
+    /* If connectivity information is available */
+    if (mesh->n_elements > 0 && mesh->elem_nodes != NULL) {
         /* Unstructured grid with cell connectivity (e.g. FESOM triangles) */
-        int *num_verts_per_cell = malloc(mesh->n_elements * sizeof(int));
-        if (!num_verts_per_cell) return NULL;
-        for (size_t i = 0; i < mesh->n_elements; i++) {
-            num_verts_per_cell[i] = mesh->n_vertices;
-        }
-
-        struct yac_basic_grid *grid = yac_basic_grid_unstruct_deg_new(
-            "source",
-            mesh->n_points,
-            mesh->n_elements,
-            num_verts_per_cell,
-            mesh->lon,
-            mesh->lat,
-            mesh->elem_nodes);
-
-        free(num_verts_per_cell);
-        return grid;
-    } else if (mesh->n_elements > 0 && mesh->elem_nodes != NULL) {
-        /* Have connectivity but using NNN method - still provide full grid */
         int *num_verts_per_cell = malloc(mesh->n_elements * sizeof(int));
         if (!num_verts_per_cell) return NULL;
         for (size_t i = 0; i < mesh->n_elements; i++) {
