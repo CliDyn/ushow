@@ -746,12 +746,15 @@ void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
     size_t n_tgt = r->n_tgt_points;
 
     /* Convert source data to double and build fractional mask:
-     * 1.0 = valid source point, 0.0 = masked (fill) */
+     * 1.0 = valid source point, 0.0 = masked (fill).
+     * The source field must be pre-multiplied by the frac mask before
+     * passing to yac_interpolation_execute_frac. */
     double *src_d = r->src_buf;
     double *frac  = r->frac_buf;
     for (size_t i = 0; i < n_src; i++) {
-        src_d[i] = (double)src[i];
-        frac[i]  = (src[i] != fill) ? 1.0 : 0.0;
+        double valid = (src[i] != fill) ? 1.0 : 0.0;
+        frac[i]  = valid;
+        src_d[i] = (double)src[i] * valid;
     }
 
     /* Initialize target to fill */
