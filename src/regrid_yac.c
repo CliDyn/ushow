@@ -168,7 +168,7 @@ int yac_method_needs_connectivity(USYacMethod m) {
 }
 
 /* Build YAC source grid from USMesh */
-static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method) {
+static struct yac_basic_grid *build_source_grid(USMesh *mesh) {
     /* For 2D curvilinear or 1D structured grids with known dimensions,
      * use YAC's native curve_2d support. This avoids the need for
      * auto-generated triangulation which fails on grids with folds
@@ -454,7 +454,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     printf("YAC: Creating regrid with method '%s'...\n", yac_method_name(method));
 
     /* 1. Build grids */
-    struct yac_basic_grid *src_grid = build_source_grid(mesh, method);
+    struct yac_basic_grid *src_grid = build_source_grid(mesh);
     if (!src_grid) {
         fprintf(stderr, "YAC: Failed to create source grid\n");
         return NULL;
