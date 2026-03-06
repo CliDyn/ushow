@@ -212,79 +212,74 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh) {
     }
 }
 
-/* Build target grid (equirectangular or LAEA polar) */
-static struct yac_basic_grid *build_target_grid(
+/* Build equirectangular target grid (global or regional --box) */
+static struct yac_basic_grid *build_target_grid_equirect(
     double resolution, const USTargetConfig *config,
     size_t *out_nx, size_t *out_ny) {
 
-    /* Default to global equirectangular if no config */
-    USTargetConfig default_cfg;
-    if (!config) {
-        target_config_init_default(&default_cfg);
-        config = &default_cfg;
-    }
+    double lon_min = config->lon_min, lon_max = config->lon_max;
+    double lat_min = config->lat_min, lat_max = config->lat_max;
 
-    if (config->projection == PROJ_EQUIRECTANGULAR) {
-        /* Equirectangular (global or regional --box) */
-        double lon_min = config->lon_min, lon_max = config->lon_max;
-        double lat_min = config->lat_min, lat_max = config->lat_max;
+    size_t nx = (size_t)((lon_max - lon_min) / resolution);
+    size_t ny = (size_t)((lat_max - lat_min) / resolution);
+    if (nx < 1) nx = 1;
+    if (ny < 1) ny = 1;
 
-        size_t nx = (size_t)((lon_max - lon_min) / resolution);
-        size_t ny = (size_t)((lat_max - lat_min) / resolution);
-        if (nx < 1) nx = 1;
-        if (ny < 1) ny = 1;
+    size_t n_lon_verts = nx + 1;
+    size_t n_lat_verts = ny + 1;
 
-        size_t n_lon_verts = nx + 1;
-        size_t n_lat_verts = ny + 1;
-
-        double *lon_verts = malloc(n_lon_verts * sizeof(double));
-        double *lat_verts = malloc(n_lat_verts * sizeof(double));
-        if (!lon_verts || !lat_verts) {
-            free(lon_verts);
-            free(lat_verts);
-            return NULL;
-        }
-
-        double dlon = (lon_max - lon_min) / (double)nx;
-        double dlat = (lat_max - lat_min) / (double)ny;
-
-        for (size_t i = 0; i <= nx; i++)
-            lon_verts[i] = lon_min + i * dlon;
-        for (size_t j = 0; j <= ny; j++)
-            lat_verts[j] = lat_min + j * dlat;
-
-        size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
-        int cyclic[2] = {0, 0};
-
-        struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
-            YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, lon_verts, lat_verts);
-
+    double *lon_verts = malloc(n_lon_verts * sizeof(double));
+    double *lat_verts = malloc(n_lat_verts * sizeof(double));
+    if (!lon_verts || !lat_verts) {
         free(lon_verts);
         free(lat_verts);
-
-        /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
-        size_t n_cells = nx * ny;
-        yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
-        if (cell_coords) {
-            for (size_t j = 0; j < ny; j++) {
-                double lat_center = lat_min + (j + 0.5) * dlat;
-                for (size_t i = 0; i < nx; i++) {
-                    double lon_center = lon_min + (i + 0.5) * dlon;
-                    lonlat_to_cartesian(lon_center, lat_center,
-                                       &cell_coords[j * nx + i][0],
-                                       &cell_coords[j * nx + i][1],
-                                       &cell_coords[j * nx + i][2]);
-                }
-            }
-            yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
-        }
-
-        *out_nx = nx;
-        *out_ny = ny;
-        return grid;
+        return NULL;
     }
 
-    /* LAEA polar projection */
+    double dlon = (lon_max - lon_min) / (double)nx;
+    double dlat = (lat_max - lat_min) / (double)ny;
+
+    for (size_t i = 0; i <= nx; i++)
+        lon_verts[i] = lon_min + i * dlon;
+    for (size_t j = 0; j <= ny; j++)
+        lat_verts[j] = lat_min + j * dlat;
+
+    size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
+    int cyclic[2] = {0, 0};
+
+    struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
+        YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, lon_verts, lat_verts);
+
+    free(lon_verts);
+    free(lat_verts);
+
+    /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
+    size_t n_cells = nx * ny;
+    yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
+    if (cell_coords) {
+        for (size_t j = 0; j < ny; j++) {
+            double lat_center = lat_min + (j + 0.5) * dlat;
+            for (size_t i = 0; i < nx; i++) {
+                double lon_center = lon_min + (i + 0.5) * dlon;
+                lonlat_to_cartesian(lon_center, lat_center,
+                                   &cell_coords[j * nx + i][0],
+                                   &cell_coords[j * nx + i][1],
+                                   &cell_coords[j * nx + i][2]);
+            }
+        }
+        yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
+    }
+
+    *out_nx = nx;
+    *out_ny = ny;
+    return grid;
+}
+
+/* Build LAEA polar target grid (north or south pole) */
+static struct yac_basic_grid *build_target_grid_laea(
+    double resolution, const USTargetConfig *config,
+    size_t *out_nx, size_t *out_ny) {
+
     double R = EARTH_RADIUS_M;
     int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
     double extent = laea_extent_from_cutoff(config->cutoff_lat, pole, R);
@@ -367,6 +362,25 @@ static struct yac_basic_grid *build_target_grid(
     *out_nx = n;
     *out_ny = n;
     return grid;
+}
+
+/* Build target grid — dispatches to projection-specific builder */
+static struct yac_basic_grid *build_target_grid(
+    double resolution, const USTargetConfig *config,
+    size_t *out_nx, size_t *out_ny) {
+
+    /* Default to global equirectangular if no config */
+    USTargetConfig default_cfg;
+    if (!config) {
+        target_config_init_default(&default_cfg);
+        config = &default_cfg;
+    }
+
+    if (config->projection == PROJ_EQUIRECTANGULAR)
+        return build_target_grid_equirect(resolution, config, out_nx, out_ny);
+
+    /* PROJ_LAEA_NORTH or PROJ_LAEA_SOUTH */
+    return build_target_grid_laea(resolution, config, out_nx, out_ny);
 }
 
 /* Configure interpolation stack based on method */
