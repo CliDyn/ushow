@@ -63,6 +63,50 @@ struct USYacRegrid {
 static int mpi_initialized_by_us = 0;
 static int yaxt_initialized_by_us = 0;
 
+/* ---- Method descriptor table ------------------------------------------- */
+
+typedef enum { INTERP_KIND_NNN, INTERP_KIND_AVG, INTERP_KIND_CONSERV } InterpKind;
+
+typedef struct {
+    USYacMethod  method;
+    const char  *name;
+    int          needs_connectivity;
+    InterpKind   kind;
+    union {
+        struct { int type; size_t n; double max_dist; double scale; } nnn;
+        struct { int type; int partial; }                             avg;
+        struct { int order; int enforced; int partial; int norm; }    conserv;
+    } p;
+} USYacMethodInfo;
+
+#define NNN(t,n,md,sc)    .kind = INTERP_KIND_NNN,     .p.nnn     = {(t),(n),(md),(sc)}
+#define AVG(t,pa)         .kind = INTERP_KIND_AVG,     .p.avg     = {(t),(pa)}
+#define CONSERV(o,e,pa,n) .kind = INTERP_KIND_CONSERV, .p.conserv = {(o),(e),(pa),(n)}
+
+static const USYacMethodInfo method_table[] = {
+    { YAC_METHOD_NNN_1,          "nnn1",      0, NNN(YAC_INTERP_NNN_DIST,  1, 0.0, 0.0) },
+    { YAC_METHOD_NNN_4_DIST,     "nnn4dist",  0, NNN(YAC_INTERP_NNN_DIST,  4, 0.0, 0.0) },
+    { YAC_METHOD_NNN_4_GAUSS,    "nnn4gauss", 0, NNN(YAC_INTERP_NNN_GAUSS, 4, 0.0,
+                                                      YAC_INTERP_NNN_GAUSS_SCALE_DEFAULT) },
+    { YAC_METHOD_AVERAGE_ARITH,  "avg_arith", 1, AVG(YAC_INTERP_AVG_ARITHMETIC, 1) },
+    { YAC_METHOD_AVERAGE_DIST,   "avg_dist",  1, AVG(YAC_INTERP_AVG_DIST, 1) },
+    { YAC_METHOD_AVERAGE_BARY,   "avg_bary",  1, AVG(YAC_INTERP_AVG_BARY, 1) },
+    { YAC_METHOD_CONSERVATIVE_1, "conserv1",  1, CONSERV(1, 0, 1, YAC_INTERP_CONSERV_DESTAREA) },
+    { YAC_METHOD_CONSERVATIVE_2, "conserv2",  1, CONSERV(2, 0, 1, YAC_INTERP_CONSERV_DESTAREA) },
+};
+
+#undef NNN
+#undef AVG
+#undef CONSERV
+
+#define METHOD_COUNT (sizeof(method_table) / sizeof(method_table[0]))
+
+static const USYacMethodInfo *method_lookup(USYacMethod m) {
+    for (size_t i = 0; i < METHOD_COUNT; i++)
+        if (method_table[i].method == m) return &method_table[i];
+    return NULL;
+}
+
 static double get_time_seconds(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -103,34 +147,15 @@ void yac_regrid_finalize(void) {
 }
 
 const char *yac_method_name(USYacMethod m) {
-    switch (m) {
-        case YAC_METHOD_NNN_1:           return "nnn1";
-        case YAC_METHOD_NNN_4_DIST:      return "nnn4dist";
-        case YAC_METHOD_NNN_4_GAUSS:     return "nnn4gauss";
-        case YAC_METHOD_AVERAGE_ARITH:   return "avg_arith";
-        case YAC_METHOD_AVERAGE_DIST:    return "avg_dist";
-        case YAC_METHOD_AVERAGE_BARY:    return "avg_bary";
-        case YAC_METHOD_CONSERVATIVE_1:  return "conserv1";
-        case YAC_METHOD_CONSERVATIVE_2:  return "conserv2";
-        default:                         return "unknown";
-    }
+    const USYacMethodInfo *info = method_lookup(m);
+    return info ? info->name : "unknown";
 }
 
 int yac_method_parse(const char *name, USYacMethod *out) {
     if (!name || !out) return -1;
-    struct { const char *str; USYacMethod m; } table[] = {
-        {"nnn1",       YAC_METHOD_NNN_1},
-        {"nnn4dist",   YAC_METHOD_NNN_4_DIST},
-        {"nnn4gauss",  YAC_METHOD_NNN_4_GAUSS},
-        {"avg_arith",  YAC_METHOD_AVERAGE_ARITH},
-        {"avg_dist",   YAC_METHOD_AVERAGE_DIST},
-        {"avg_bary",   YAC_METHOD_AVERAGE_BARY},
-        {"conserv1",   YAC_METHOD_CONSERVATIVE_1},
-        {"conserv2",   YAC_METHOD_CONSERVATIVE_2},
-    };
-    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
-        if (strcmp(name, table[i].str) == 0) {
-            *out = table[i].m;
+    for (size_t i = 0; i < METHOD_COUNT; i++) {
+        if (strcmp(name, method_table[i].name) == 0) {
+            *out = method_table[i].method;
             return 0;
         }
     }
@@ -138,16 +163,8 @@ int yac_method_parse(const char *name, USYacMethod *out) {
 }
 
 int yac_method_needs_connectivity(USYacMethod m) {
-    switch (m) {
-        case YAC_METHOD_AVERAGE_ARITH:
-        case YAC_METHOD_AVERAGE_DIST:
-        case YAC_METHOD_AVERAGE_BARY:
-        case YAC_METHOD_CONSERVATIVE_1:
-        case YAC_METHOD_CONSERVATIVE_2:
-            return 1;
-        default:
-            return 0;
-    }
+    const USYacMethodInfo *info = method_lookup(m);
+    return info ? info->needs_connectivity : 0;
 }
 
 /* Build YAC source grid from USMesh */
@@ -354,46 +371,27 @@ static struct yac_basic_grid *build_target_grid(
 
 /* Configure interpolation stack based on method */
 static struct yac_interp_stack_config *build_interp_stack(USYacMethod method) {
+    const USYacMethodInfo *info = method_lookup(method);
+    if (!info) return NULL;
+
     struct yac_interp_stack_config *config = yac_interp_stack_config_new();
     if (!config) return NULL;
 
-    switch (method) {
-        case YAC_METHOD_NNN_1:
+    switch (info->kind) {
+        case INTERP_KIND_NNN:
             yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_DIST, 1, 0.0, 0.0);
+                config, info->p.nnn.type, info->p.nnn.n,
+                info->p.nnn.max_dist, info->p.nnn.scale);
             break;
-        case YAC_METHOD_NNN_4_DIST:
-            yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_DIST, 4, 0.0, 0.0);
-            break;
-        case YAC_METHOD_NNN_4_GAUSS:
-            yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_GAUSS, 4, 0.0,
-                YAC_INTERP_NNN_GAUSS_SCALE_DEFAULT);
-            break;
-        case YAC_METHOD_AVERAGE_ARITH:
+        case INTERP_KIND_AVG:
             yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_ARITHMETIC, 1);
+                config, info->p.avg.type, info->p.avg.partial);
             break;
-        case YAC_METHOD_AVERAGE_DIST:
-            yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_DIST, 1);
-            break;
-        case YAC_METHOD_AVERAGE_BARY:
-            yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_BARY, 1);
-            break;
-        case YAC_METHOD_CONSERVATIVE_1:
+        case INTERP_KIND_CONSERV:
             yac_interp_stack_config_add_conservative(
-                config, 1, 0, 1, YAC_INTERP_CONSERV_DESTAREA);
+                config, info->p.conserv.order, info->p.conserv.enforced,
+                info->p.conserv.partial, info->p.conserv.norm);
             break;
-        case YAC_METHOD_CONSERVATIVE_2:
-            yac_interp_stack_config_add_conservative(
-                config, 2, 0, 1, YAC_INTERP_CONSERV_DESTAREA);
-            break;
-        default:
-            yac_interp_stack_config_delete(config);
-            return NULL;
     }
 
     return config;
