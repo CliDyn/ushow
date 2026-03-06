@@ -54,8 +54,8 @@ struct USYacRegrid {
     double laea_R;
     USTargetConfig config;  /* stored copy for 3D rebuild path */
 
-    /* Fractional-mask interpolation for 3D (--yac-3d) */
-    USMesh *mesh_ref;                        /* non-owned, for lazy creation */
+    /* Fractional-mask interpolation (--yac-3d) */
+    int frac_enabled;                        /* use frac-mask apply path */
     struct yac_interpolation *interp_frac;   /* single interp with frac masking */
     double *frac_buf;                        /* [n_src_points] frac mask buffer */
 };
@@ -701,18 +701,16 @@ USYacMethod yac_regrid_get_method(const USYacRegrid *r) {
     return r ? r->method : YAC_METHOD_NNN_1;
 }
 
-void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh) {
-    if (r) r->mesh_ref = mesh;
+void yac_regrid_enable_frac(USYacRegrid *r) {
+    if (r) r->frac_enabled = 1;
 }
 
-int yac_regrid_is_3d(const USYacRegrid *r) {
-    return r && r->mesh_ref != NULL;
+int yac_regrid_frac_enabled(const USYacRegrid *r) {
+    return r && r->frac_enabled;
 }
 
-void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
-                          const float *src, float fill, float *dst) {
-    (void)depth_idx;
-    (void)n_depths;
+void yac_regrid_apply_frac(USYacRegrid *r,
+                           const float *src, float fill, float *dst) {
     if (!r || !src || !dst || !r->weights) return;
 
     /* Lazy-create fractional-mask interpolation from cached weights.
@@ -724,14 +722,14 @@ void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
             YAC_MAPPING_ON_TGT, 1, (double)fill,
             1.0, 0.0, NULL, 1, 1);
         if (!r->interp_frac) {
-            fprintf(stderr, "YAC 3D: Failed to create frac-mask interpolation\n");
+            fprintf(stderr, "YAC frac: failed to create frac-mask interpolation\n");
             return;
         }
         /* Allocate fractional mask buffer alongside */
         if (!r->frac_buf) {
             r->frac_buf = malloc(r->n_src_points * sizeof(double));
             if (!r->frac_buf) {
-                fprintf(stderr, "YAC 3D: Failed to allocate frac mask buffer\n");
+                fprintf(stderr, "YAC frac: failed to allocate frac mask buffer\n");
                 return;
             }
         }

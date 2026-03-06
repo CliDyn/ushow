@@ -260,7 +260,7 @@ Options:
   --yac                  Use YAC interpolation with default method (avg_arith)
   --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
-  --yac-3d               Per-depth masked interpolation for 3D variables
+  --yac-3d               Fractional fill-value masking for 3D variables
   -h, --help             Show help message
 ```
 
@@ -282,7 +282,7 @@ Options (uterm):
   --cutoff <deg>     Cutoff latitude for polar view (default: 60)
   --yac              Use YAC interpolation (default: avg_arith)
   --yac-method <m>   Use YAC interpolation method (requires WITH_YAC=1)
-  --yac-3d           Per-depth masked interpolation for 3D variables
+  --yac-3d           Fractional fill-value masking for 3D variables
   -h, --help             Show help
 ```
 
@@ -341,7 +341,7 @@ YAC interpolation (requires `make WITH_YAC=1`):
 ./ushow temp.nc -m mesh.nc --yac-method nnn4dist    # 4-NN distance-weighted
 ./ushow temp.nc -m mesh.nc --yac-method nnn4gauss   # 4-NN Gaussian-weighted
 ./ushow temp.nc -m mesh.nc --yac-method avg_arith   # Cell averaging
-./ushow temp.nc -m mesh.nc --yac-3d                 # Per-depth masking for 3D ocean data
+./ushow temp.nc -m mesh.nc --yac-3d                 # Fractional masking for 3D ocean data
 ./ushow temp.nc -m mesh.nc --yac-3d --yac-method nnn4dist  # Combine with specific method
 ```
 
@@ -399,7 +399,7 @@ The test suite includes:
 - **test_file_netcdf**: NetCDF file I/O
 - **test_file_mitgcm**: MITgcm MDS binary file I/O
 - **test_file_zarr**: Zarr file I/O (when built with `WITH_ZARR=1`)
-- **test_yac_3d**: Per-depth masked YAC interpolation (when built with `WITH_YAC=1`)
+- **test_yac_3d**: Fractional fill-value masking for YAC interpolation (when built with `WITH_YAC=1`)
 - **test_yac_click**: Time series click-to-node lookup in YAC mode (when built with `WITH_YAC=1`)
 - **test_integration**: End-to-end workflow tests
 
@@ -460,13 +460,11 @@ By default, ushow uses a fast KDTree nearest-neighbor lookup to map unstructured
 
 NNN methods work with any grid type. Averaging methods require element connectivity — for grids that lack it (reduced Gaussian, HEALPix, etc.), ushow auto-generates a triangulation from latitude bands. For MPAS grids, native dual-mesh connectivity (`cellsOnVertex`) is read directly from the file.
 
-### Per-Depth Masking (`--yac-3d`)
+### Fractional Fill-Value Masking (`--yac-3d`)
 
 For 3D ocean variables (e.g., temperature at 50 depth levels), deeper levels have more land masking — fewer valid source points. Without `--yac-3d`, a single interpolation is used for all depths, so fill values from land points can bleed into the result at deeper levels.
 
-With `--yac-3d`, ushow builds a separate masked interpolation for each depth level lazily (on first visit). Each level only uses valid (non-fill) source points, producing clean coastlines at all depths. Surface levels that have no masking reuse the base interpolation with no overhead.
-
-The first visit to each new depth level builds a masked interpolation (timing depends on grid size); subsequent visits are instant (cached). The cache is cleared automatically when you switch variables or cycle interpolation methods.
+With `--yac-3d`, ushow generates a dynamic fractional mask from the source field before each interpolation step: valid points receive weight 1.0, fill points 0.0. The mask is passed to YAC's fractional interpolation (`yac_interpolation_execute_frac`), which rescales partially-masked target cells and assigns the fill value to fully-masked cells. This produces clean coastlines at every depth level.
 
 ## Data Flow
 

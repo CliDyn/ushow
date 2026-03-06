@@ -280,7 +280,7 @@ typedef struct {
     USTargetConfig target_config;   /* Target grid configuration */
 #ifdef HAVE_YAC
     int         yac_method;        /* YAC interpolation method (-1 = disabled) */
-    int         yac_3d;            /* Per-depth masked interpolation */
+    int         yac_3d;            /* Fractional fill-value masking */
 #endif
 } USOptions;
 

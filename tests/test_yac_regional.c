@@ -453,8 +453,8 @@ TEST(box_3d_rebuild_respects_config) {
     USYacRegrid *r = yac_regrid_create(mesh, 5.0, YAC_METHOD_NNN_1, &cfg);
     ASSERT_NOT_NULL(r);
 
-    yac_regrid_enable_3d(r, mesh);
-    ASSERT_TRUE(yac_regrid_is_3d(r));
+    yac_regrid_enable_frac(r);
+    ASSERT_TRUE(yac_regrid_frac_enabled(r));
 
     size_t n_src = mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -468,7 +468,7 @@ TEST(box_3d_rebuild_respects_config) {
 
     float fill = 1.0e20f;
 
-    /* Create data with some fill values to force a 3D rebuild */
+    /* Create data with some fill values to exercise frac masking */
     for (size_t i = 0; i < n_src; i++) {
         if (i % 3 == 0)
             src[i] = fill;
@@ -476,8 +476,8 @@ TEST(box_3d_rebuild_respects_config) {
             src[i] = 273.0f + (float)i * 0.01f;
     }
 
-    /* This triggers build_interpolation with stored config */
-    yac_regrid_apply_3d(r, 0, 3, src, fill, dst);
+    /* This triggers frac-mask interpolation with stored config */
+    yac_regrid_apply_frac(r, src, fill, dst);
 
     /* Grid dims should still match box (not global) */
     size_t nx2, ny2;

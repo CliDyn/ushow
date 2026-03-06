@@ -1,9 +1,9 @@
 /*
- * test_yac_3d.c - Unit tests for per-depth masked YAC interpolation (--yac-3d)
+ * test_yac_3d.c - Unit tests for fractional fill-value masking (--yac-3d)
  *
  * Requires: make WITH_YAC=1 test-yac-3d
  *
- * Tests the depth-cache API: enable_3d, is_3d, clear_depth_cache, apply_3d.
+ * Tests the frac-mask API: enable_frac, frac_enabled, apply_frac.
  * Uses a small point cloud so YAC setup is fast (~0.1s per interpolation).
  */
 
@@ -69,29 +69,29 @@ static void teardown(void) {
 
 TEST(yac3d_not_enabled_by_default) {
     ASSERT_TRUE(setup());
-    ASSERT_FALSE(yac_regrid_is_3d(g_regrid));
+    ASSERT_FALSE(yac_regrid_frac_enabled(g_regrid));
     teardown();
     return 1;
 }
 
 TEST(yac3d_enable) {
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
-    ASSERT_TRUE(yac_regrid_is_3d(g_regrid));
+    yac_regrid_enable_frac(g_regrid);
+    ASSERT_TRUE(yac_regrid_frac_enabled(g_regrid));
     teardown();
     return 1;
 }
 
-TEST(yac3d_is_3d_null_safe) {
-    ASSERT_FALSE(yac_regrid_is_3d(NULL));
+TEST(yac3d_frac_enabled_null_safe) {
+    ASSERT_FALSE(yac_regrid_frac_enabled(NULL));
     return 1;
 }
 
 TEST(yac3d_apply_all_valid_reuses_base) {
-    /* When all source data is valid, depth cache should use the base
-     * interpolation (sentinel). Verify by checking output is reasonable. */
+    /* When all source data is valid, frac mask is all-ones and the base
+     * interpolation weights apply unchanged. */
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
+    yac_regrid_enable_frac(g_regrid);
 
     size_t n_src = g_mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -106,8 +106,7 @@ TEST(yac3d_apply_all_valid_reuses_base) {
     float fill = 1.0e20f;
     fill_all_valid(src, n_src, fill);
 
-    /* Apply for depth 0 of 5 depths */
-    yac_regrid_apply_3d(g_regrid, 0, 5, src, fill, dst);
+    yac_regrid_apply_frac(g_regrid, src, fill, dst);
 
     /* Output should have some non-fill values */
     int n_valid = 0;
@@ -123,9 +122,9 @@ TEST(yac3d_apply_all_valid_reuses_base) {
 }
 
 TEST(yac3d_apply_with_mask_builds_new_interp) {
-    /* When some source points are fill, a new masked interpolation is built. */
+    /* When some source points are fill, the frac mask excludes them. */
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
+    yac_regrid_enable_frac(g_regrid);
 
     size_t n_src = g_mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -141,8 +140,7 @@ TEST(yac3d_apply_with_mask_builds_new_interp) {
     /* Every 3rd point is fill (masked) */
     fill_with_mask(src, n_src, fill, 3);
 
-    /* Apply for depth 2 of 5 depths */
-    yac_regrid_apply_3d(g_regrid, 2, 5, src, fill, dst);
+    yac_regrid_apply_frac(g_regrid, src, fill, dst);
 
     /* Output should have some non-fill values */
     int n_valid = 0;
@@ -158,11 +156,10 @@ TEST(yac3d_apply_with_mask_builds_new_interp) {
 }
 
 TEST(yac3d_cached_second_call_fast) {
-    /* Second call to same depth should use cached interpolation.
-     * We can't measure time precisely but verify it doesn't crash
-     * and produces same results. */
+    /* Second call with same mask should reuse the frac interpolation
+     * object and produce identical results. */
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
+    yac_regrid_enable_frac(g_regrid);
 
     size_t n_src = g_mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -179,10 +176,10 @@ TEST(yac3d_cached_second_call_fast) {
     float fill = 1.0e20f;
     fill_with_mask(src, n_src, fill, 4);
 
-    /* First call builds the cached interpolation */
-    yac_regrid_apply_3d(g_regrid, 1, 3, src, fill, dst1);
+    /* First call builds the frac interpolation */
+    yac_regrid_apply_frac(g_regrid, src, fill, dst1);
     /* Second call should reuse it */
-    yac_regrid_apply_3d(g_regrid, 1, 3, src, fill, dst2);
+    yac_regrid_apply_frac(g_regrid, src, fill, dst2);
 
     /* Results should be identical */
     for (size_t i = 0; i < n_tgt; i++) {
@@ -199,7 +196,7 @@ TEST(yac3d_cached_second_call_fast) {
 TEST(yac3d_different_depths_different_masks) {
     /* Two depth levels with different masks should produce different results */
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
+    yac_regrid_enable_frac(g_regrid);
 
     size_t n_src = g_mesh->n_points;
     float *src_d0 = malloc(n_src * sizeof(float));
@@ -222,8 +219,8 @@ TEST(yac3d_different_depths_different_masks) {
     /* Depth 1: heavy masking (every 2nd point) */
     fill_with_mask(src_d1, n_src, fill, 2);
 
-    yac_regrid_apply_3d(g_regrid, 0, 2, src_d0, fill, dst0);
-    yac_regrid_apply_3d(g_regrid, 1, 2, src_d1, fill, dst1);
+    yac_regrid_apply_frac(g_regrid, src_d0, fill, dst0);
+    yac_regrid_apply_frac(g_regrid, src_d1, fill, dst1);
 
     /* The results should differ (different masks, different source data) */
     int n_differ = 0;
@@ -243,7 +240,7 @@ TEST(yac3d_different_depths_different_masks) {
 TEST(yac3d_reapply_consistent) {
     /* Applying twice should produce the same result */
     ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
+    yac_regrid_enable_frac(g_regrid);
 
     size_t n_src = g_mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -260,11 +257,10 @@ TEST(yac3d_reapply_consistent) {
     float fill = 1.0e20f;
     fill_with_mask(src, n_src, fill, 5);
 
-    /* Build cache */
-    yac_regrid_apply_3d(g_regrid, 0, 3, src, fill, dst1);
+    yac_regrid_apply_frac(g_regrid, src, fill, dst1);
 
-    /* Rebuild */
-    yac_regrid_apply_3d(g_regrid, 0, 3, src, fill, dst2);
+    /* Reapply */
+    yac_regrid_apply_frac(g_regrid, src, fill, dst2);
 
     /* Results should be the same */
     for (size_t i = 0; i < n_tgt; i++) {
@@ -279,9 +275,9 @@ TEST(yac3d_reapply_consistent) {
 }
 
 TEST(yac3d_non_3d_apply_still_works) {
-    /* When 3d is not enabled, regular apply should work fine */
+    /* When frac mode is not enabled, regular apply should work fine */
     ASSERT_TRUE(setup());
-    ASSERT_FALSE(yac_regrid_is_3d(g_regrid));
+    ASSERT_FALSE(yac_regrid_frac_enabled(g_regrid));
 
     size_t n_src = g_mesh->n_points;
     float *src = malloc(n_src * sizeof(float));
@@ -317,7 +313,7 @@ int main(void) {
         return 1;
     }
 
-    int result = run_all_tests("YAC 3D Per-Depth Masking");
+    int result = run_all_tests("YAC Fractional Masking");
 
     yac_regrid_finalize();
     return result;
