@@ -100,11 +100,6 @@ USYacMethod yac_regrid_get_method(const USYacRegrid *r);
 void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh);
 
 /*
- * Clear per-depth cache (call on variable change).
- */
-void yac_regrid_clear_depth_cache(USYacRegrid *r);
-
-/*
  * Check if 3d mode is enabled.
  */
 int yac_regrid_is_3d(const USYacRegrid *r);

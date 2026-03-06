@@ -51,12 +51,6 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     view->mesh = mesh;
     view->regrid = regrid;
 
-#ifdef HAVE_YAC
-    if (view->yac_regrid) {
-        yac_regrid_clear_depth_cache((USYacRegrid*)view->yac_regrid);
-    }
-#endif
-
     /* Get dimension info - use fileset total if available */
     if (view->fileset) {
 #ifdef HAVE_ZARR

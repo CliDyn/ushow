@@ -87,21 +87,6 @@ TEST(yac3d_is_3d_null_safe) {
     return 1;
 }
 
-TEST(yac3d_clear_empty_cache) {
-    ASSERT_TRUE(setup());
-    yac_regrid_enable_3d(g_regrid, g_mesh);
-    /* Clearing before any apply should be safe (no-op) */
-    yac_regrid_clear_depth_cache(g_regrid);
-    ASSERT_TRUE(yac_regrid_is_3d(g_regrid));
-    teardown();
-    return 1;
-}
-
-TEST(yac3d_clear_null_safe) {
-    yac_regrid_clear_depth_cache(NULL);
-    return 1;
-}
-
 TEST(yac3d_apply_all_valid_reuses_base) {
     /* When all source data is valid, depth cache should use the base
      * interpolation (sentinel). Verify by checking output is reasonable. */
@@ -255,8 +240,8 @@ TEST(yac3d_different_depths_different_masks) {
     return 1;
 }
 
-TEST(yac3d_clear_then_rebuild) {
-    /* After clearing cache, next apply should rebuild */
+TEST(yac3d_reapply_consistent) {
+    /* Applying twice should produce the same result */
     ASSERT_TRUE(setup());
     yac_regrid_enable_3d(g_regrid, g_mesh);
 
@@ -278,8 +263,7 @@ TEST(yac3d_clear_then_rebuild) {
     /* Build cache */
     yac_regrid_apply_3d(g_regrid, 0, 3, src, fill, dst1);
 
-    /* Clear and rebuild */
-    yac_regrid_clear_depth_cache(g_regrid);
+    /* Rebuild */
     yac_regrid_apply_3d(g_regrid, 0, 3, src, fill, dst2);
 
     /* Results should be the same */

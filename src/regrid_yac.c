@@ -705,11 +705,6 @@ void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh) {
     if (r) r->mesh_ref = mesh;
 }
 
-void yac_regrid_clear_depth_cache(USYacRegrid *r) {
-    if (!r) return;
-    /* interp_frac is rebuilt lazily on next apply_3d; no per-depth state to clear */
-}
-
 int yac_regrid_is_3d(const USYacRegrid *r) {
     return r && r->mesh_ref != NULL;
 }
