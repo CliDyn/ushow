@@ -574,7 +574,7 @@ static void on_yac_method_cycle(void) {
             &options.target_config);
     }
     if (options.yac_3d)
-        yac_regrid_enable_3d(yac_regrid_ptr, mesh);
+        yac_regrid_enable_frac(yac_regrid_ptr);
     view_set_yac_regrid(view, yac_regrid_ptr);
     x_update_render_mode_label(yac_method_name(
         yac_regrid_get_method(yac_regrid_ptr)));
@@ -871,7 +871,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         nnn1, nnn4dist, nnn4gauss,\n");
     fprintf(stderr, "                         avg_arith, avg_dist, avg_bary,\n");
     fprintf(stderr, "                         conserv1, conserv2\n");
-    fprintf(stderr, "      --yac-3d           Per-depth masked interpolation for 3D variables\n");
+    fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
     fprintf(stderr, "      --light            Use light theme (default: dark)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
@@ -1252,7 +1252,7 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             if (options.yac_3d)
-                yac_regrid_enable_3d(yac_regrid_ptr, mesh);
+                yac_regrid_enable_frac(yac_regrid_ptr);
         } else
 #endif
         {

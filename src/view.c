@@ -51,12 +51,6 @@ int view_set_variable(USView *view, USVar *var, USMesh *mesh, USRegrid *regrid) 
     view->mesh = mesh;
     view->regrid = regrid;
 
-#ifdef HAVE_YAC
-    if (view->yac_regrid) {
-        yac_regrid_clear_depth_cache((USYacRegrid*)view->yac_regrid);
-    }
-#endif
-
     /* Get dimension info - use fileset total if available */
     if (view->fileset) {
 #ifdef HAVE_ZARR
@@ -510,10 +504,10 @@ int view_update(USView *view) {
 #ifdef HAVE_YAC
     if (view->yac_regrid) {
         USYacRegrid *yr = (USYacRegrid*)view->yac_regrid;
-        if (yac_regrid_is_3d(yr) && view->n_depths > 1) {
-            yac_regrid_apply_3d(yr, view->depth_index, view->n_depths,
-                                view->raw_data, view->variable->fill_value,
-                                view->regridded_data);
+        if (yac_regrid_frac_enabled(yr) && view->n_depths > 1) {
+            yac_regrid_apply_frac(yr,
+                                  view->raw_data, view->variable->fill_value,
+                                  view->regridded_data);
         } else {
             yac_regrid_apply(yr, view->raw_data,
                              view->variable->fill_value, view->regridded_data);

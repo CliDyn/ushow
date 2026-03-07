@@ -61,7 +61,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
  * fill: fill value for missing/invalid data
  * dst: output data [target_ny * target_nx], must be preallocated
  */
-void yac_regrid_apply(const USYacRegrid *r, const float *src, float fill, float *dst);
+void yac_regrid_apply(USYacRegrid *r, const float *src, float fill, float *dst);
 
 /*
  * Get target grid dimensions.
@@ -95,25 +95,26 @@ int yac_method_needs_connectivity(USYacMethod m);
 USYacMethod yac_regrid_get_method(const USYacRegrid *r);
 
 /*
- * Enable per-depth masked interpolation (--yac-3d).
+ * Enable fractional-mask mode (--yac-3d).
+ * In contrast to yac_regrid_apply, the source field is checked for fill
+ * values, a dynamic fractional mask is generated accordingly, and applied.
  */
-void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh);
+void yac_regrid_enable_frac(USYacRegrid *r);
 
 /*
- * Clear per-depth cache (call on variable change).
+ * Check if fractional-mask mode is enabled.
  */
-void yac_regrid_clear_depth_cache(USYacRegrid *r);
+int yac_regrid_frac_enabled(const USYacRegrid *r);
 
 /*
- * Check if 3d mode is enabled.
+ * Apply regridding with dynamic fractional masking.
+ * The source field is scanned for fill values; valid points receive a
+ * fractional mask of 1.0, fill points 0.0.  The result is computed via
+ * yac_interpolation_execute_frac so that partially-masked target cells
+ * are weighted correctly and fully-masked cells receive the fill value.
  */
-int yac_regrid_is_3d(const USYacRegrid *r);
-
-/*
- * Apply with per-depth masking. Builds/caches masked interpolation on first access.
- */
-void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
-                          const float *src, float fill, float *dst);
+void yac_regrid_apply_frac(USYacRegrid *r,
+                           const float *src, float fill, float *dst);
 
 /*
  * Check if regrid uses a non-global region (box or polar projection).

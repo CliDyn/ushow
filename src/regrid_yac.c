@@ -23,6 +23,10 @@
 /* YAXT must be initialized before YAC grid operations */
 #include <xt/xt_core.h>
 
+/* Grid name constants used when registering source/target grids with YAC */
+#define YAC_SOURCE_GRID_NAME "source"
+#define YAC_TARGET_GRID_NAME "target"
+
 /* Store YAC interpolation object for execute-based apply */
 struct USYacRegrid {
     size_t target_nx, target_ny;
@@ -34,6 +38,9 @@ struct USYacRegrid {
 
     /* YAC interpolation object (handles redistribution + weight apply) */
     struct yac_interpolation *interp;
+
+    /* YAC interpolation weights (retained for reuse / inspection) */
+    struct yac_interp_weights *weights;
 
     /* Temporary double buffers for float<->double conversion */
     double *src_buf;   /* [n_src_points] */
@@ -47,13 +54,58 @@ struct USYacRegrid {
     double laea_R;
     USTargetConfig config;  /* stored copy for 3D rebuild path */
 
-    /* Per-depth cache (--yac-3d) */
-    USMesh *mesh_ref;                        /* non-owned, for lazy creation */
-    struct yac_interpolation **depth_cache;  /* [depth_cache_n], NULL = not yet built */
-    size_t depth_cache_n;                    /* 0 = 3d mode not enabled */
+    /* Fractional-mask interpolation (--yac-3d) */
+    int frac_enabled;                        /* use frac-mask apply path */
+    struct yac_interpolation *interp_frac;   /* single interp with frac masking */
+    double *frac_buf;                        /* [n_src_points] frac mask buffer */
 };
 
 static int mpi_initialized_by_us = 0;
+static int yaxt_initialized_by_us = 0;
+
+/* ---- Method descriptor table ------------------------------------------- */
+
+typedef enum { INTERP_KIND_NNN, INTERP_KIND_AVG, INTERP_KIND_CONSERV } InterpKind;
+
+typedef struct {
+    USYacMethod  method;
+    const char  *name;
+    int          needs_connectivity;
+    InterpKind   kind;
+    union {
+        struct { int type; size_t n; double max_dist; double scale; } nnn;
+        struct { int type; int partial; }                             avg;
+        struct { int order; int enforced; int partial; int norm; }    conserv;
+    } p;
+} USYacMethodInfo;
+
+#define NNN(t,n,md,sc)    .kind = INTERP_KIND_NNN,     .p.nnn     = {(t),(n),(md),(sc)}
+#define AVG(t,pa)         .kind = INTERP_KIND_AVG,     .p.avg     = {(t),(pa)}
+#define CONSERV(o,e,pa,n) .kind = INTERP_KIND_CONSERV, .p.conserv = {(o),(e),(pa),(n)}
+
+static const USYacMethodInfo method_table[] = {
+    { YAC_METHOD_NNN_1,          "nnn1",      0, NNN(YAC_INTERP_NNN_DIST,  1, 0.0, 0.0) },
+    { YAC_METHOD_NNN_4_DIST,     "nnn4dist",  0, NNN(YAC_INTERP_NNN_DIST,  4, 0.0, 0.0) },
+    { YAC_METHOD_NNN_4_GAUSS,    "nnn4gauss", 0, NNN(YAC_INTERP_NNN_GAUSS, 4, 0.0,
+                                                      YAC_INTERP_NNN_GAUSS_SCALE_DEFAULT) },
+    { YAC_METHOD_AVERAGE_ARITH,  "avg_arith", 1, AVG(YAC_INTERP_AVG_ARITHMETIC, 1) },
+    { YAC_METHOD_AVERAGE_DIST,   "avg_dist",  1, AVG(YAC_INTERP_AVG_DIST, 1) },
+    { YAC_METHOD_AVERAGE_BARY,   "avg_bary",  1, AVG(YAC_INTERP_AVG_BARY, 1) },
+    { YAC_METHOD_CONSERVATIVE_1, "conserv1",  1, CONSERV(1, 0, 1, YAC_INTERP_CONSERV_DESTAREA) },
+    { YAC_METHOD_CONSERVATIVE_2, "conserv2",  1, CONSERV(2, 0, 1, YAC_INTERP_CONSERV_DESTAREA) },
+};
+
+#undef NNN
+#undef AVG
+#undef CONSERV
+
+#define METHOD_COUNT (sizeof(method_table) / sizeof(method_table[0]))
+
+static const USYacMethodInfo *method_lookup(USYacMethod m) {
+    for (size_t i = 0; i < METHOD_COUNT; i++)
+        if (method_table[i].method == m) return &method_table[i];
+    return NULL;
+}
 
 static double get_time_seconds(void) {
     struct timeval tv;
@@ -74,13 +126,15 @@ int yac_regrid_init(void) {
     /* YAXT must be initialized before any YAC grid operations */
     if (!xt_initialized()) {
         xt_initialize(MPI_COMM_WORLD);
+        yaxt_initialized_by_us = 1;
     }
     return 0;
 }
 
 void yac_regrid_finalize(void) {
-    if (xt_initialized()) {
+    if (yaxt_initialized_by_us && xt_initialized()) {
         xt_finalize();
+        yaxt_initialized_by_us = 0;
     }
     if (mpi_initialized_by_us) {
         int finalized = 0;
@@ -93,34 +147,15 @@ void yac_regrid_finalize(void) {
 }
 
 const char *yac_method_name(USYacMethod m) {
-    switch (m) {
-        case YAC_METHOD_NNN_1:           return "nnn1";
-        case YAC_METHOD_NNN_4_DIST:      return "nnn4dist";
-        case YAC_METHOD_NNN_4_GAUSS:     return "nnn4gauss";
-        case YAC_METHOD_AVERAGE_ARITH:   return "avg_arith";
-        case YAC_METHOD_AVERAGE_DIST:    return "avg_dist";
-        case YAC_METHOD_AVERAGE_BARY:    return "avg_bary";
-        case YAC_METHOD_CONSERVATIVE_1:  return "conserv1";
-        case YAC_METHOD_CONSERVATIVE_2:  return "conserv2";
-        default:                         return "unknown";
-    }
+    const USYacMethodInfo *info = method_lookup(m);
+    return info ? info->name : "unknown";
 }
 
 int yac_method_parse(const char *name, USYacMethod *out) {
     if (!name || !out) return -1;
-    struct { const char *str; USYacMethod m; } table[] = {
-        {"nnn1",       YAC_METHOD_NNN_1},
-        {"nnn4dist",   YAC_METHOD_NNN_4_DIST},
-        {"nnn4gauss",  YAC_METHOD_NNN_4_GAUSS},
-        {"avg_arith",  YAC_METHOD_AVERAGE_ARITH},
-        {"avg_dist",   YAC_METHOD_AVERAGE_DIST},
-        {"avg_bary",   YAC_METHOD_AVERAGE_BARY},
-        {"conserv1",   YAC_METHOD_CONSERVATIVE_1},
-        {"conserv2",   YAC_METHOD_CONSERVATIVE_2},
-    };
-    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
-        if (strcmp(name, table[i].str) == 0) {
-            *out = table[i].m;
+    for (size_t i = 0; i < METHOD_COUNT; i++) {
+        if (strcmp(name, method_table[i].name) == 0) {
+            *out = method_table[i].method;
             return 0;
         }
     }
@@ -128,20 +163,12 @@ int yac_method_parse(const char *name, USYacMethod *out) {
 }
 
 int yac_method_needs_connectivity(USYacMethod m) {
-    switch (m) {
-        case YAC_METHOD_AVERAGE_ARITH:
-        case YAC_METHOD_AVERAGE_DIST:
-        case YAC_METHOD_AVERAGE_BARY:
-        case YAC_METHOD_CONSERVATIVE_1:
-        case YAC_METHOD_CONSERVATIVE_2:
-            return 1;
-        default:
-            return 0;
-    }
+    const USYacMethodInfo *info = method_lookup(m);
+    return info ? info->needs_connectivity : 0;
 }
 
 /* Build YAC source grid from USMesh */
-static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method) {
+static struct yac_basic_grid *build_source_grid(USMesh *mesh) {
     /* For 2D curvilinear or 1D structured grids with known dimensions,
      * use YAC's native curve_2d support. This avoids the need for
      * auto-generated triangulation which fails on grids with folds
@@ -152,11 +179,11 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
         size_t nbr_vertices[2] = {mesh->orig_nx, mesh->orig_ny};
         int cyclic[2] = {0, 0};
         return yac_basic_grid_curve_2d_deg_new(
-            "source", nbr_vertices, cyclic, mesh->lon, mesh->lat);
+            YAC_SOURCE_GRID_NAME, nbr_vertices, cyclic, mesh->lon, mesh->lat);
     }
 
-    if (mesh->n_elements > 0 && mesh->elem_nodes != NULL &&
-        yac_method_needs_connectivity(method)) {
+    /* If connectivity information is available */
+    if (mesh->n_elements > 0 && mesh->elem_nodes != NULL) {
         /* Unstructured grid with cell connectivity (e.g. FESOM triangles) */
         int *num_verts_per_cell = malloc(mesh->n_elements * sizeof(int));
         if (!num_verts_per_cell) return NULL;
@@ -165,26 +192,7 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
         }
 
         struct yac_basic_grid *grid = yac_basic_grid_unstruct_deg_new(
-            "source",
-            mesh->n_points,
-            mesh->n_elements,
-            num_verts_per_cell,
-            mesh->lon,
-            mesh->lat,
-            mesh->elem_nodes);
-
-        free(num_verts_per_cell);
-        return grid;
-    } else if (mesh->n_elements > 0 && mesh->elem_nodes != NULL) {
-        /* Have connectivity but using NNN method - still provide full grid */
-        int *num_verts_per_cell = malloc(mesh->n_elements * sizeof(int));
-        if (!num_verts_per_cell) return NULL;
-        for (size_t i = 0; i < mesh->n_elements; i++) {
-            num_verts_per_cell[i] = mesh->n_vertices;
-        }
-
-        struct yac_basic_grid *grid = yac_basic_grid_unstruct_deg_new(
-            "source",
+            YAC_SOURCE_GRID_NAME,
             mesh->n_points,
             mesh->n_elements,
             num_verts_per_cell,
@@ -197,94 +205,81 @@ static struct yac_basic_grid *build_source_grid(USMesh *mesh, USYacMethod method
     } else {
         /* Point cloud (e.g. HEALPix, or unstructured without connectivity) */
         return yac_basic_grid_cloud_deg_new(
-            "source",
+            YAC_SOURCE_GRID_NAME,
             mesh->n_points,
             mesh->lon,
             mesh->lat);
     }
 }
 
-/* Convert lon/lat (degrees) to 3D Cartesian on unit sphere */
-static void lonlat_deg_to_xyz(double lon_deg, double lat_deg, double xyz[3]) {
-    double lon_rad = lon_deg * M_PI / 180.0;
-    double lat_rad = lat_deg * M_PI / 180.0;
-    double cos_lat = cos(lat_rad);
-    xyz[0] = cos_lat * cos(lon_rad);
-    xyz[1] = cos_lat * sin(lon_rad);
-    xyz[2] = sin(lat_rad);
-}
-
-/* Build target grid (equirectangular or LAEA polar) */
-static struct yac_basic_grid *build_target_grid(
+/* Build equirectangular target grid (global or regional --box) */
+static struct yac_basic_grid *build_target_grid_equirect(
     double resolution, const USTargetConfig *config,
     size_t *out_nx, size_t *out_ny) {
 
-    /* Default to global equirectangular if no config */
-    USTargetConfig default_cfg;
-    if (!config) {
-        target_config_init_default(&default_cfg);
-        config = &default_cfg;
-    }
+    double lon_min = config->lon_min, lon_max = config->lon_max;
+    double lat_min = config->lat_min, lat_max = config->lat_max;
 
-    if (config->projection == PROJ_EQUIRECTANGULAR) {
-        /* Equirectangular (global or regional --box) */
-        double lon_min = config->lon_min, lon_max = config->lon_max;
-        double lat_min = config->lat_min, lat_max = config->lat_max;
+    size_t nx = (size_t)((lon_max - lon_min) / resolution);
+    size_t ny = (size_t)((lat_max - lat_min) / resolution);
+    if (nx < 1) nx = 1;
+    if (ny < 1) ny = 1;
 
-        size_t nx = (size_t)((lon_max - lon_min) / resolution);
-        size_t ny = (size_t)((lat_max - lat_min) / resolution);
-        if (nx < 1) nx = 1;
-        if (ny < 1) ny = 1;
+    size_t n_lon_verts = nx + 1;
+    size_t n_lat_verts = ny + 1;
 
-        size_t n_lon_verts = nx + 1;
-        size_t n_lat_verts = ny + 1;
-
-        double *lon_verts = malloc(n_lon_verts * sizeof(double));
-        double *lat_verts = malloc(n_lat_verts * sizeof(double));
-        if (!lon_verts || !lat_verts) {
-            free(lon_verts);
-            free(lat_verts);
-            return NULL;
-        }
-
-        double dlon = (lon_max - lon_min) / (double)nx;
-        double dlat = (lat_max - lat_min) / (double)ny;
-
-        for (size_t i = 0; i <= nx; i++)
-            lon_verts[i] = lon_min + i * dlon;
-        for (size_t j = 0; j <= ny; j++)
-            lat_verts[j] = lat_min + j * dlat;
-
-        size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
-        int cyclic[2] = {0, 0};
-
-        struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
-            "target", nbr_vertices, cyclic, lon_verts, lat_verts);
-
+    double *lon_verts = malloc(n_lon_verts * sizeof(double));
+    double *lat_verts = malloc(n_lat_verts * sizeof(double));
+    if (!lon_verts || !lat_verts) {
         free(lon_verts);
         free(lat_verts);
-
-        /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
-        size_t n_cells = nx * ny;
-        yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
-        if (cell_coords) {
-            for (size_t j = 0; j < ny; j++) {
-                double lat_center = lat_min + (j + 0.5) * dlat;
-                for (size_t i = 0; i < nx; i++) {
-                    double lon_center = lon_min + (i + 0.5) * dlon;
-                    lonlat_deg_to_xyz(lon_center, lat_center,
-                                      cell_coords[j * nx + i]);
-                }
-            }
-            yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
-        }
-
-        *out_nx = nx;
-        *out_ny = ny;
-        return grid;
+        return NULL;
     }
 
-    /* LAEA polar projection */
+    double dlon = (lon_max - lon_min) / (double)nx;
+    double dlat = (lat_max - lat_min) / (double)ny;
+
+    for (size_t i = 0; i <= nx; i++)
+        lon_verts[i] = lon_min + i * dlon;
+    for (size_t j = 0; j <= ny; j++)
+        lat_verts[j] = lat_min + j * dlat;
+
+    size_t nbr_vertices[2] = {n_lon_verts, n_lat_verts};
+    int cyclic[2] = {0, 0};
+
+    struct yac_basic_grid *grid = yac_basic_grid_reg_2d_deg_new(
+        YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, lon_verts, lat_verts);
+
+    free(lon_verts);
+    free(lat_verts);
+
+    /* Add cell center coordinates (required for YAC_LOC_CELL interpolation) */
+    size_t n_cells = nx * ny;
+    yac_coordinate_pointer cell_coords = malloc(n_cells * sizeof(*cell_coords));
+    if (cell_coords) {
+        for (size_t j = 0; j < ny; j++) {
+            double lat_center = lat_min + (j + 0.5) * dlat;
+            for (size_t i = 0; i < nx; i++) {
+                double lon_center = lon_min + (i + 0.5) * dlon;
+                lonlat_to_cartesian(lon_center, lat_center,
+                                   &cell_coords[j * nx + i][0],
+                                   &cell_coords[j * nx + i][1],
+                                   &cell_coords[j * nx + i][2]);
+            }
+        }
+        yac_basic_grid_add_coordinates_nocpy(grid, YAC_LOC_CELL, cell_coords);
+    }
+
+    *out_nx = nx;
+    *out_ny = ny;
+    return grid;
+}
+
+/* Build LAEA polar target grid (north or south pole) */
+static struct yac_basic_grid *build_target_grid_laea(
+    double resolution, const USTargetConfig *config,
+    size_t *out_nx, size_t *out_ny) {
+
     double R = EARTH_RADIUS_M;
     int pole = (config->projection == PROJ_LAEA_NORTH) ? 1 : -1;
     double extent = laea_extent_from_cutoff(config->cutoff_lat, pole, R);
@@ -329,7 +324,7 @@ static struct yac_basic_grid *build_target_grid(
     size_t nbr_vertices[2] = {nvx, nvy};
     int cyclic[2] = {0, 0};
     struct yac_basic_grid *grid = yac_basic_grid_curve_2d_deg_new(
-        "target", nbr_vertices, cyclic, vert_lon, vert_lat);
+        YAC_TARGET_GRID_NAME, nbr_vertices, cyclic, vert_lon, vert_lat);
 
     free(vert_lon);
     free(vert_lat);
@@ -344,10 +339,16 @@ static struct yac_basic_grid *build_target_grid(
                 double px = -extent + (i + 0.5) * dx;
                 double lo, la;
                 if (laea_inverse(px, py, pole, R, &lo, &la) == 0) {
-                    lonlat_deg_to_xyz(lo, la, cell_coords[j * n + i]);
+                    lonlat_to_cartesian(lo, la,
+                                       &cell_coords[j * n + i][0],
+                                       &cell_coords[j * n + i][1],
+                                       &cell_coords[j * n + i][2]);
                 } else {
-                    lonlat_deg_to_xyz(0.0, (pole > 0) ? 90.0 : -90.0,
-                                      cell_coords[j * n + i]);
+                    double pole_lat = (pole > 0) ? 90.0 : -90.0;
+                    lonlat_to_cartesian(0.0, pole_lat,
+                                       &cell_coords[j * n + i][0],
+                                       &cell_coords[j * n + i][1],
+                                       &cell_coords[j * n + i][2]);
                 }
             }
         }
@@ -363,48 +364,48 @@ static struct yac_basic_grid *build_target_grid(
     return grid;
 }
 
+/* Build target grid — dispatches to projection-specific builder */
+static struct yac_basic_grid *build_target_grid(
+    double resolution, const USTargetConfig *config,
+    size_t *out_nx, size_t *out_ny) {
+
+    /* Default to global equirectangular if no config */
+    USTargetConfig default_cfg;
+    if (!config) {
+        target_config_init_default(&default_cfg);
+        config = &default_cfg;
+    }
+
+    if (config->projection == PROJ_EQUIRECTANGULAR)
+        return build_target_grid_equirect(resolution, config, out_nx, out_ny);
+
+    /* PROJ_LAEA_NORTH or PROJ_LAEA_SOUTH */
+    return build_target_grid_laea(resolution, config, out_nx, out_ny);
+}
+
 /* Configure interpolation stack based on method */
 static struct yac_interp_stack_config *build_interp_stack(USYacMethod method) {
+    const USYacMethodInfo *info = method_lookup(method);
+    if (!info) return NULL;
+
     struct yac_interp_stack_config *config = yac_interp_stack_config_new();
     if (!config) return NULL;
 
-    switch (method) {
-        case YAC_METHOD_NNN_1:
+    switch (info->kind) {
+        case INTERP_KIND_NNN:
             yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_DIST, 1, 0.0, 0.0);
+                config, info->p.nnn.type, info->p.nnn.n,
+                info->p.nnn.max_dist, info->p.nnn.scale);
             break;
-        case YAC_METHOD_NNN_4_DIST:
-            yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_DIST, 4, 0.0, 0.0);
-            break;
-        case YAC_METHOD_NNN_4_GAUSS:
-            yac_interp_stack_config_add_nnn(
-                config, YAC_INTERP_NNN_GAUSS, 4, 0.0,
-                YAC_INTERP_NNN_GAUSS_SCALE_DEFAULT);
-            break;
-        case YAC_METHOD_AVERAGE_ARITH:
+        case INTERP_KIND_AVG:
             yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_ARITHMETIC, 1);
+                config, info->p.avg.type, info->p.avg.partial);
             break;
-        case YAC_METHOD_AVERAGE_DIST:
-            yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_DIST, 1);
-            break;
-        case YAC_METHOD_AVERAGE_BARY:
-            yac_interp_stack_config_add_average(
-                config, YAC_INTERP_AVG_BARY, 1);
-            break;
-        case YAC_METHOD_CONSERVATIVE_1:
+        case INTERP_KIND_CONSERV:
             yac_interp_stack_config_add_conservative(
-                config, 1, 0, 1, YAC_INTERP_CONSERV_DESTAREA);
+                config, info->p.conserv.order, info->p.conserv.enforced,
+                info->p.conserv.partial, info->p.conserv.norm);
             break;
-        case YAC_METHOD_CONSERVATIVE_2:
-            yac_interp_stack_config_add_conservative(
-                config, 2, 0, 1, YAC_INTERP_CONSERV_DESTAREA);
-            break;
-        default:
-            yac_interp_stack_config_delete(config);
-            return NULL;
     }
 
     return config;
@@ -422,112 +423,6 @@ static enum yac_location get_tgt_location(USYacMethod method) {
     (void)method;
     /* Target buffer is nx*ny cells */
     return YAC_LOC_CELL;
-}
-
-/*
- * Build a single YAC interpolation object.
- * If src_mask is non-NULL, applies it to the source grid corners.
- * Returns NULL on failure.
- */
-static struct yac_interpolation *
-build_interpolation(USMesh *mesh, USYacMethod method,
-                    double resolution,
-                    const int *src_mask,
-                    const USTargetConfig *config) {
-    /* 1. Build grids */
-    struct yac_basic_grid *src_grid = build_source_grid(mesh, method);
-    if (!src_grid) return NULL;
-
-    /* Apply source mask if provided */
-    size_t mask_idx = SIZE_MAX;
-    if (src_mask) {
-        mask_idx = yac_basic_grid_add_mask(
-            src_grid, YAC_LOC_CORNER, src_mask, mesh->n_points, "depth_mask");
-    }
-
-    size_t nx, ny;
-    struct yac_basic_grid *tgt_grid = build_target_grid(resolution, config, &nx, &ny);
-    if (!tgt_grid) {
-        yac_basic_grid_delete(src_grid);
-        return NULL;
-    }
-
-    /* 2. Create distributed grid pair */
-    struct yac_dist_grid_pair *grid_pair =
-        yac_dist_grid_pair_new(src_grid, tgt_grid, MPI_COMM_SELF);
-    if (!grid_pair) {
-        yac_basic_grid_delete(src_grid);
-        yac_basic_grid_delete(tgt_grid);
-        return NULL;
-    }
-
-    /* 3. Set up interpolation fields */
-    struct yac_interp_field src_field = {
-        .location = get_src_location(method),
-        .coordinates_idx = SIZE_MAX,
-        .masks_idx = mask_idx
-    };
-    struct yac_interp_field tgt_field = {
-        .location = get_tgt_location(method),
-        .coordinates_idx = 0,
-        .masks_idx = SIZE_MAX
-    };
-
-    struct yac_interp_grid *interp_grid = yac_interp_grid_new(
-        grid_pair, "source", "target", 1, &src_field, tgt_field);
-    if (!interp_grid) {
-        yac_dist_grid_pair_delete(grid_pair);
-        yac_basic_grid_delete(src_grid);
-        yac_basic_grid_delete(tgt_grid);
-        return NULL;
-    }
-
-    /* 4. Configure interpolation method */
-    struct yac_interp_stack_config *stack_config = build_interp_stack(method);
-    if (!stack_config) {
-        yac_interp_grid_delete(interp_grid);
-        yac_dist_grid_pair_delete(grid_pair);
-        yac_basic_grid_delete(src_grid);
-        yac_basic_grid_delete(tgt_grid);
-        return NULL;
-    }
-
-    struct interp_method **methods = yac_interp_stack_config_generate(stack_config);
-    yac_interp_stack_config_delete(stack_config);
-    if (!methods) {
-        yac_interp_grid_delete(interp_grid);
-        yac_dist_grid_pair_delete(grid_pair);
-        yac_basic_grid_delete(src_grid);
-        yac_basic_grid_delete(tgt_grid);
-        return NULL;
-    }
-
-    /* 5. Compute weights */
-    struct yac_interp_weights *weights =
-        yac_interp_method_do_search(methods, interp_grid);
-    yac_interp_method_delete(methods);
-    if (!weights) {
-        yac_interp_grid_delete(interp_grid);
-        yac_dist_grid_pair_delete(grid_pair);
-        yac_basic_grid_delete(src_grid);
-        yac_basic_grid_delete(tgt_grid);
-        return NULL;
-    }
-
-    /* 6. Create interpolation object */
-    struct yac_interpolation *interp = yac_interp_weights_get_interpolation(
-        weights,
-        YAC_MAPPING_ON_TGT, 1, YAC_FRAC_MASK_NO_VALUE,
-        1.0, 0.0, NULL, 1, 1);
-
-    /* 7. Cleanup intermediates */
-    yac_interp_weights_delete(weights);
-    yac_interp_grid_delete(interp_grid);
-    yac_dist_grid_pair_delete(grid_pair);
-    yac_basic_grid_delete(src_grid);
-    yac_basic_grid_delete(tgt_grid);
-
-    return interp;
 }
 
 USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod method,
@@ -573,7 +468,7 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     printf("YAC: Creating regrid with method '%s'...\n", yac_method_name(method));
 
     /* 1. Build grids */
-    struct yac_basic_grid *src_grid = build_source_grid(mesh, method);
+    struct yac_basic_grid *src_grid = build_source_grid(mesh);
     if (!src_grid) {
         fprintf(stderr, "YAC: Failed to create source grid\n");
         return NULL;
@@ -630,7 +525,8 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     };
 
     struct yac_interp_grid *interp_grid = yac_interp_grid_new(
-        grid_pair, "source", "target", 1, &src_field, tgt_field);
+        grid_pair, YAC_SOURCE_GRID_NAME, YAC_TARGET_GRID_NAME, 1,
+        &src_field, tgt_field);
     if (!interp_grid) {
         fprintf(stderr, "YAC: Failed to create interp grid\n");
         yac_dist_grid_pair_delete(grid_pair);
@@ -678,35 +574,16 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
         return NULL;
     }
 
-    /* 6. Create interpolation object (handles data redistribution + weight apply) */
-    struct yac_interpolation *interp = yac_interp_weights_get_interpolation(
-        weights,
-        YAC_MAPPING_ON_TGT,       /* apply weights on target side */
-        1,                         /* collection_size */
-        YAC_FRAC_MASK_NO_VALUE,   /* disable fractional masking */
-        1.0,                       /* scaling_factor */
-        0.0,                       /* scaling_summand */
-        NULL,                      /* yaxt_exchanger_name */
-        1,                         /* is_source */
-        1                          /* is_target */
-    );
-
-    /* 7. Cleanup intermediates (interpolation object is self-contained) */
-    yac_interp_weights_delete(weights);
+    /* 6. Cleanup intermediates (weights kept in struct for lazy interp creation) */
     yac_interp_grid_delete(interp_grid);
     yac_dist_grid_pair_delete(grid_pair);
     yac_basic_grid_delete(src_grid);
     yac_basic_grid_delete(tgt_grid);
 
-    if (!interp) {
-        fprintf(stderr, "YAC: Failed to create interpolation object\n");
-        return NULL;
-    }
-
-    /* 8. Allocate result struct */
+    /* 7. Allocate result struct (interp created lazily on first apply) */
     USYacRegrid *r = calloc(1, sizeof(USYacRegrid));
     if (!r) {
-        yac_interpolation_delete(interp);
+        yac_interp_weights_delete(weights);
         return NULL;
     }
 
@@ -716,7 +593,8 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     r->resolution = resolution;
     r->n_src_points = mesh->n_points;
     r->n_tgt_points = nx * ny;
-    r->interp = interp;
+    r->interp = NULL;  /* created lazily on first apply */
+    r->weights = weights;
     r->projection = config->projection;
     r->laea_R = EARTH_RADIUS_M;
     r->config = *config;
@@ -751,8 +629,20 @@ USYacRegrid *yac_regrid_create(USMesh *mesh, double resolution, USYacMethod meth
     return r;
 }
 
-void yac_regrid_apply(const USYacRegrid *r, const float *src, float fill, float *dst) {
-    if (!r || !src || !dst || !r->interp) return;
+void yac_regrid_apply(USYacRegrid *r, const float *src, float fill, float *dst) {
+    if (!r || !src || !dst || !r->weights) return;
+
+    /* Lazy-create interpolation object on first call */
+    if (!r->interp) {
+        r->interp = yac_interp_weights_get_interpolation(
+            r->weights,
+            YAC_MAPPING_ON_TGT, 1, YAC_FRAC_MASK_NO_VALUE,
+            1.0, 0.0, NULL, 1, 1);
+        if (!r->interp) {
+            fprintf(stderr, "YAC: Failed to create interpolation object\n");
+            return;
+        }
+    }
 
     size_t n_src = r->n_src_points;
     size_t n_tgt = r->n_tgt_points;
@@ -823,96 +713,76 @@ USYacMethod yac_regrid_get_method(const USYacRegrid *r) {
     return r ? r->method : YAC_METHOD_NNN_1;
 }
 
-void yac_regrid_enable_3d(USYacRegrid *r, USMesh *mesh) {
-    if (r) r->mesh_ref = mesh;
+void yac_regrid_enable_frac(USYacRegrid *r) {
+    if (r) r->frac_enabled = 1;
 }
 
-void yac_regrid_clear_depth_cache(USYacRegrid *r) {
-    if (!r || !r->depth_cache) return;
-    for (size_t i = 0; i < r->depth_cache_n; i++) {
-        if (r->depth_cache[i] && r->depth_cache[i] != r->interp) {
-            yac_interpolation_delete(r->depth_cache[i]);
-        }
-    }
-    free(r->depth_cache);
-    r->depth_cache = NULL;
-    r->depth_cache_n = 0;
+int yac_regrid_frac_enabled(const USYacRegrid *r) {
+    return r && r->frac_enabled;
 }
 
-int yac_regrid_is_3d(const USYacRegrid *r) {
-    return r && r->mesh_ref != NULL;
-}
+void yac_regrid_apply_frac(USYacRegrid *r,
+                           const float *src, float fill, float *dst) {
+    if (!r || !src || !dst || !r->weights) return;
 
-void yac_regrid_apply_3d(USYacRegrid *r, size_t depth_idx, size_t n_depths,
-                          const float *src, float fill, float *dst) {
-    if (!r || !src || !dst) return;
-
-    /* Lazy-allocate depth cache array */
-    if (!r->depth_cache) {
-        r->depth_cache = calloc(n_depths, sizeof(struct yac_interpolation *));
-        if (!r->depth_cache) return;
-        r->depth_cache_n = n_depths;
-    }
-
-    /* Build masked interpolation for this depth if not cached */
-    if (!r->depth_cache[depth_idx]) {
-        /* Scan source data for fill values to build mask */
-        size_t n = r->n_src_points;
-        int all_valid = 1;
-        int *mask = malloc(n * sizeof(int));
-        if (!mask) {
-            /* Fallback to unmasked */
-            yac_regrid_apply(r, src, fill, dst);
+    /* Lazy-create fractional-mask interpolation from cached weights.
+     * Uses fill value as frac_mask_fallback_value so that fully-masked
+     * target points receive the fill value automatically. */
+    if (!r->interp_frac) {
+        r->interp_frac = yac_interp_weights_get_interpolation(
+            r->weights,
+            YAC_MAPPING_ON_TGT, 1, (double)fill,
+            1.0, 0.0, NULL, 1, 1);
+        if (!r->interp_frac) {
+            fprintf(stderr, "YAC frac: failed to create frac-mask interpolation\n");
             return;
         }
-        for (size_t i = 0; i < n; i++) {
-            mask[i] = (src[i] != fill) ? 1 : 0;
-            if (!mask[i]) all_valid = 0;
-        }
-
-        if (all_valid) {
-            /* No masking needed — reuse base interpolation (sentinel) */
-            r->depth_cache[depth_idx] = r->interp;
-            free(mask);
-        } else {
-            double t0 = get_time_seconds();
-            struct yac_interpolation *masked =
-                build_interpolation(r->mesh_ref, r->method,
-                                    r->resolution, mask, &r->config);
-            free(mask);
-
-            if (masked) {
-                r->depth_cache[depth_idx] = masked;
-            } else {
-                /* Fallback to unmasked */
-                r->depth_cache[depth_idx] = r->interp;
+        /* Allocate fractional mask buffer alongside */
+        if (!r->frac_buf) {
+            r->frac_buf = malloc(r->n_src_points * sizeof(double));
+            if (!r->frac_buf) {
+                fprintf(stderr, "YAC frac: failed to allocate frac mask buffer\n");
+                return;
             }
-            double t1 = get_time_seconds();
-            printf("YAC 3D: Built masked interpolation for depth %zu (%.2fs)\n",
-                   depth_idx, t1 - t0);
         }
     }
 
-    /* Execute interpolation using the cached object */
-    struct yac_interpolation *interp = r->depth_cache[depth_idx];
     size_t n_src = r->n_src_points;
     size_t n_tgt = r->n_tgt_points;
 
+    /* Convert source data to double and build fractional mask:
+     * 1.0 = valid source point, 0.0 = masked (fill).
+     * The source field must be pre-multiplied by the frac mask before
+     * passing to yac_interpolation_execute_frac. */
     double *src_d = r->src_buf;
-    for (size_t i = 0; i < n_src; i++)
-        src_d[i] = (double)src[i];
+    double *frac  = r->frac_buf;
+    for (size_t i = 0; i < n_src; i++) {
+        double valid = (src[i] != fill) ? 1.0 : 0.0;
+        frac[i]  = valid;
+        src_d[i] = (double)src[i] * valid;
+    }
 
+    /* Initialize target to fill */
     double *tgt_d = r->tgt_buf;
     for (size_t i = 0; i < n_tgt; i++)
         tgt_d[i] = (double)fill;
 
-    double *src_field_ptr = src_d;
+    /* Execute with fractional masking:
+     * src_fields[collection][field][local], src_frac_masks same layout */
+    double  *src_field_ptr = src_d;
     double **src_fields_ptr = &src_field_ptr;
     double ***src_collection = &src_fields_ptr;
+
+    double  *frac_field_ptr = frac;
+    double **frac_fields_ptr = &frac_field_ptr;
+    double ***frac_collection = &frac_fields_ptr;
+
     double **tgt_collection = &tgt_d;
 
-    yac_interpolation_execute(interp, src_collection, tgt_collection);
+    yac_interpolation_execute_frac(
+        r->interp_frac, src_collection, frac_collection, tgt_collection);
 
+    /* Convert back to float */
     for (size_t i = 0; i < n_tgt; i++)
         dst[i] = (float)tgt_d[i];
 }
@@ -928,8 +798,10 @@ int yac_regrid_is_regional(const USYacRegrid *r) {
 
 void yac_regrid_free(USYacRegrid *r) {
     if (!r) return;
-    yac_regrid_clear_depth_cache(r);
+    if (r->interp_frac) yac_interpolation_delete(r->interp_frac);
     if (r->interp) yac_interpolation_delete(r->interp);
+    if (r->weights) yac_interp_weights_delete(r->weights);
+    free(r->frac_buf);
     free(r->src_buf);
     free(r->tgt_buf);
     free(r);
