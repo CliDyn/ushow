@@ -51,6 +51,21 @@ static USDimInfo *current_dim_info = NULL;
 static int n_current_dims = 0;
 
 /* Options */
+typedef struct {
+    int         debug;
+    double      influence_radius;   /* Regrid influence radius in meters */
+    double      target_resolution;  /* Target grid resolution in degrees */
+    char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
+    int         frame_delay_ms;     /* Animation speed */
+    int         polygon_only;       /* Skip regridding, polygon mode only */
+    USTargetConfig target_config;   /* Target grid configuration */
+    int         user_threads;      /* CLI --threads value (0 = not set) */
+#ifdef HAVE_YAC
+    int         yac_method;        /* YAC interpolation method (-1 = disabled) */
+    int         yac_3d;            /* Fractional fill-value masking */
+#endif
+} USOptions;
+
 static USOptions options = {
     .debug = 0,
     .influence_radius = DEFAULT_INFLUENCE_RADIUS_M,
