@@ -933,22 +933,36 @@ static void cleanup_all(void) {
 }
 
 static int parse_options(int argc, char **argv, int *first_data_arg) {
+    /* Long-only option codes (above ASCII range to avoid conflicts) */
+    enum {
+        OPT_CHARS = 256,
+        OPT_COLOR,
+        OPT_NO_COLOR,
+        OPT_RENDER,
+        OPT_BOX,
+        OPT_POLAR,
+        OPT_CUTOFF,
+        OPT_YAC,
+        OPT_YAC_METHOD,
+        OPT_YAC_3D,
+    };
+
     static struct option long_options[] = {
         {"mesh", required_argument, 0, 'm'},
         {"resolution", required_argument, 0, 'r'},
         {"influence", required_argument, 0, 'i'},
         {"delay", required_argument, 0, 'd'},
-        {"chars", required_argument, 0, 1000},
-        {"render", required_argument, 0, 1003},
-        {"color", no_argument, 0, 1001},
-        {"no-color", no_argument, 0, 1002},
-        {"box",    required_argument, 0, 1200},
-        {"polar",  required_argument, 0, 1201},
-        {"cutoff", required_argument, 0, 1202},
+        {"chars", required_argument, 0, OPT_CHARS},
+        {"render", required_argument, 0, OPT_RENDER},
+        {"color", no_argument, 0, OPT_COLOR},
+        {"no-color", no_argument, 0, OPT_NO_COLOR},
+        {"box",    required_argument, 0, OPT_BOX},
+        {"polar",  required_argument, 0, OPT_POLAR},
+        {"cutoff", required_argument, 0, OPT_CUTOFF},
 #ifdef HAVE_YAC
-        {"yac",          no_argument,       0, 1099},
-        {"yac-method", required_argument, 0, 1100},
-        {"yac-3d", no_argument, 0, 1101},
+        {"yac",          no_argument,       0, OPT_YAC},
+        {"yac-method", required_argument, 0, OPT_YAC_METHOD},
+        {"yac-3d", no_argument, 0, OPT_YAC_3D},
 #endif
         {"threads", required_argument, 0, 't'},
         {"help", no_argument, 0, 'h'},
@@ -975,11 +989,11 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
             case 'h':
                 print_usage(argv[0]);
                 return 1;
-            case 1000:
+            case OPT_CHARS:
                 strncpy(options.glyph_ramp, optarg, sizeof(options.glyph_ramp) - 1);
                 options.glyph_ramp[sizeof(options.glyph_ramp) - 1] = '\0';
                 break;
-            case 1003: {
+            case OPT_RENDER: {
                 int mode = TERM_RENDER_ASCII;
                 if (term_parse_render_mode(optarg, &mode) != 0) {
                     fprintf(stderr, "Invalid render mode: %s (use ascii|half|braille)\n", optarg);
@@ -988,17 +1002,17 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.render_mode = mode;
                 break;
             }
-            case 1001:
+            case OPT_COLOR:
                 options.color_mode = 1;
                 break;
-            case 1002:
+            case OPT_NO_COLOR:
                 options.color_mode = 0;
                 break;
 #ifdef HAVE_YAC
-            case 1099:
+            case OPT_YAC:
                 options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
-            case 1100: {
+            case OPT_YAC_METHOD: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {
                     fprintf(stderr, "Unknown YAC method: %s\n", optarg);
@@ -1009,13 +1023,13 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.yac_method = (int)ym;
                 break;
             }
-            case 1101:
+            case OPT_YAC_3D:
                 options.yac_3d = 1;
                 if (options.yac_method < 0)
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
-            case 1200: {
+            case OPT_BOX: {
                 double w, e, s, n;
                 if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
                     fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
@@ -1027,7 +1041,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.target_config.lat_max = n;
                 break;
             }
-            case 1201:
+            case OPT_POLAR:
                 if (strcmp(optarg, "north") == 0) {
                     options.target_config.projection = PROJ_LAEA_NORTH;
                 } else if (strcmp(optarg, "south") == 0) {
@@ -1037,7 +1051,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                     return -1;
                 }
                 break;
-            case 1202:
+            case OPT_CUTOFF:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
             case 't': {

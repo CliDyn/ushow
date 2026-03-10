@@ -889,6 +889,17 @@ int main(int argc, char *argv[]) {
     int n_data_files = 0;
     const char **data_filenames = NULL;
 
+    /* Long-only option codes (above ASCII range to avoid conflicts) */
+    enum {
+        OPT_BOX = 256,
+        OPT_POLAR,
+        OPT_CUTOFF,
+        OPT_YAC,
+        OPT_YAC_METHOD,
+        OPT_YAC_3D,
+        OPT_LIGHT,
+    };
+
     /* Parse command line options */
     static struct option long_options[] = {
         {"mesh",         required_argument, 0, 'm'},
@@ -896,15 +907,15 @@ int main(int argc, char *argv[]) {
         {"influence",    required_argument, 0, 'i'},
         {"delay",        required_argument, 0, 'd'},
         {"polygon-only", no_argument,       0, 'p'},
-        {"box",          required_argument, 0, 1200},
-        {"polar",        required_argument, 0, 1201},
-        {"cutoff",       required_argument, 0, 1202},
+        {"box",          required_argument, 0, OPT_BOX},
+        {"polar",        required_argument, 0, OPT_POLAR},
+        {"cutoff",       required_argument, 0, OPT_CUTOFF},
 #ifdef HAVE_YAC
-        {"yac",          no_argument,       0, 1099},
-        {"yac-method",   required_argument, 0, 1100},
-        {"yac-3d",       no_argument,       0, 1101},
+        {"yac",          no_argument,       0, OPT_YAC},
+        {"yac-method",   required_argument, 0, OPT_YAC_METHOD},
+        {"yac-3d",       no_argument,       0, OPT_YAC_3D},
 #endif
-        {"light",        no_argument,       0, 1300},
+        {"light",        no_argument,       0, OPT_LIGHT},
         {"threads",      required_argument, 0, 't'},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
@@ -930,10 +941,10 @@ int main(int argc, char *argv[]) {
                 options.polygon_only = 1;
                 break;
 #ifdef HAVE_YAC
-            case 1099:
+            case OPT_YAC:
                 options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
-            case 1100: {
+            case OPT_YAC_METHOD: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {
                     fprintf(stderr, "Unknown YAC method: %s\n", optarg);
@@ -944,13 +955,13 @@ int main(int argc, char *argv[]) {
                 options.yac_method = (int)ym;
                 break;
             }
-            case 1101:
+            case OPT_YAC_3D:
                 options.yac_3d = 1;
                 if (options.yac_method < 0)
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
-            case 1200: {
+            case OPT_BOX: {
                 double w, e, s, n;
                 if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
                     fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
@@ -962,7 +973,7 @@ int main(int argc, char *argv[]) {
                 options.target_config.lat_max = n;
                 break;
             }
-            case 1201:
+            case OPT_POLAR:
                 if (strcmp(optarg, "north") == 0) {
                     options.target_config.projection = PROJ_LAEA_NORTH;
                 } else if (strcmp(optarg, "south") == 0) {
@@ -972,10 +983,10 @@ int main(int argc, char *argv[]) {
                     return 1;
                 }
                 break;
-            case 1202:
+            case OPT_CUTOFF:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
-            case 1300:
+            case OPT_LIGHT:
                 x_set_light_theme();
                 break;
             case 't': {
