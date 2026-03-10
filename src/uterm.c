@@ -47,8 +47,6 @@
 #define CP_LOWER_HALF_BLOCK 0x2584
 #define CP_FULL_BLOCK 0x2588
 
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
-
 /* Global state */
 static USFile *file = NULL;
 static USFileSet *fileset = NULL;
@@ -398,84 +396,6 @@ static void save_frame(void) {
     } else {
         fprintf(stderr, "Failed to save frame\n");
     }
-}
-
-static int parse_time_units(const char *units, double *unit_seconds,
-                            int *origin_year, int *origin_month, int *origin_day,
-                            int *origin_hour, int *origin_minute, int *origin_second) {
-    if (!units || !unit_seconds || !origin_year || !origin_month || !origin_day ||
-        !origin_hour || !origin_minute || !origin_second) {
-        return 0;
-    }
-
-    const char *since = strstr(units, " since ");
-    if (!since) return 0;
-
-    if (strncmp(units, "days", since - units) == 0) {
-        *unit_seconds = 86400.0;
-    } else if (strncmp(units, "day", since - units) == 0) {
-        *unit_seconds = 86400.0;
-    } else if (strncmp(units, "hours", since - units) == 0) {
-        *unit_seconds = 3600.0;
-    } else if (strncmp(units, "hour", since - units) == 0) {
-        *unit_seconds = 3600.0;
-    } else if (strncmp(units, "minutes", since - units) == 0) {
-        *unit_seconds = 60.0;
-    } else if (strncmp(units, "minute", since - units) == 0) {
-        *unit_seconds = 60.0;
-    } else if (strncmp(units, "seconds", since - units) == 0) {
-        *unit_seconds = 1.0;
-    } else if (strncmp(units, "second", since - units) == 0) {
-        *unit_seconds = 1.0;
-    } else {
-        return 0;
-    }
-
-    const char *origin = since + strlen(" since ");
-    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
-    if (sscanf(origin, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s) < 3) {
-        return 0;
-    }
-
-    *origin_year = y;
-    *origin_month = mo;
-    *origin_day = d;
-    *origin_hour = h;
-    *origin_minute = mi;
-    *origin_second = s;
-    return 1;
-}
-
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units) {
-    if (!out || outlen == 0 || !units) return 0;
-
-    double unit_seconds = 0.0;
-    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
-    if (!parse_time_units(units, &unit_seconds, &y, &mo, &d, &h, &mi, &s)) {
-        return 0;
-    }
-
-    struct tm origin_tm = {0};
-    origin_tm.tm_year = y - 1900;
-    origin_tm.tm_mon = mo - 1;
-    origin_tm.tm_mday = d;
-    origin_tm.tm_hour = h;
-    origin_tm.tm_min = mi;
-    origin_tm.tm_sec = s;
-
-    time_t origin_time = timegm(&origin_tm);
-    if (origin_time == (time_t)-1) return 0;
-
-    double total_seconds = value * unit_seconds;
-    time_t target_time = origin_time + (time_t)llround(total_seconds);
-    struct tm result_tm;
-    if (!gmtime_r(&target_time, &result_tm)) return 0;
-
-    if (result_tm.tm_hour == 0 && result_tm.tm_min == 0 && result_tm.tm_sec == 0) {
-        return strftime(out, outlen, "%Y-%m-%d", &result_tm) > 0;
-    }
-
-    return strftime(out, outlen, "%Y-%m-%d %H:%M:%S", &result_tm) > 0;
 }
 
 static void render_frame(int show_help, int animating) {
