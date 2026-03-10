@@ -874,7 +874,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
     fprintf(stderr, "      --light            Use light theme (default: dark)\n");
-    fprintf(stderr, "      --threads <n>      Max threads\n");
+    fprintf(stderr, "  -t, --threads <n>      Max threads\n");
     fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
@@ -905,13 +905,13 @@ int main(int argc, char *argv[]) {
         {"yac-3d",       no_argument,       0, 1101},
 #endif
         {"light",        no_argument,       0, 1300},
-        {"threads",      required_argument, 0, 1400},
+        {"threads",      required_argument, 0, 't'},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:ph", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:pt:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
                 mesh_filename = optarg;
@@ -978,7 +978,7 @@ int main(int argc, char *argv[]) {
             case 1300:
                 x_set_light_theme();
                 break;
-            case 1400: {
+            case 't': {
                 int nt = atoi(optarg);
                 if (nt < 1) {
                     fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);

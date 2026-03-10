@@ -257,7 +257,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         conserv1, conserv2\n");
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
-    fprintf(stderr, "      --threads <n>      Max threads\n");
+    fprintf(stderr, "  -t, --threads <n>      Max threads\n");
     fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
@@ -950,13 +950,13 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"yac-method", required_argument, 0, 1100},
         {"yac-3d", no_argument, 0, 1101},
 #endif
-        {"threads", required_argument, 0, 1400},
+        {"threads", required_argument, 0, 't'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:t:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
                 strncpy(options.mesh_file, optarg, MAX_NAME_LEN - 1);
@@ -1040,7 +1040,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
             case 1202:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
-            case 1400: {
+            case 't': {
                 int nt = atoi(optarg);
                 if (nt < 1) {
                     fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
