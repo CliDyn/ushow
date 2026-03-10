@@ -445,7 +445,7 @@ static void render_frame(int show_help, int animating) {
                     strncpy(time_stamp, formatted, sizeof(time_stamp) - 1);
                     time_stamp[sizeof(time_stamp) - 1] = '\0';
                 } else if (current_dim_info[i].units[0]) {
-                    snprintf(time_stamp, sizeof(time_stamp), " %.6g %s",
+                    snprintf(time_stamp, sizeof(time_stamp), " %.6g %.44s",
                              v, current_dim_info[i].units);
                 } else {
                     snprintf(time_stamp, sizeof(time_stamp), " %.6g", v);

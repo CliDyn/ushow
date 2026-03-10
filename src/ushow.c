@@ -418,10 +418,10 @@ static void on_mouse_click(int px, int py) {
 
     /* Build title */
     if (current_var->units[0]) {
-        snprintf(ts_data.title, sizeof(ts_data.title), "%s (%s) at %.2f, %.2f",
+        snprintf(ts_data.title, sizeof(ts_data.title), "%.200s (%.200s) at %.2f, %.2f",
                  current_var->name, current_var->units, lon, lat);
     } else {
-        snprintf(ts_data.title, sizeof(ts_data.title), "%s at %.2f, %.2f",
+        snprintf(ts_data.title, sizeof(ts_data.title), "%.200s at %.2f, %.2f",
                  current_var->name, lon, lat);
     }
 
@@ -434,7 +434,7 @@ static void on_mouse_click(int px, int py) {
         for (int i = 0; i < n_current_dims; i++) {
             if (strcmp(current_dim_info[i].name, time_dim_name) == 0) {
                 if (current_dim_info[i].units[0]) {
-                    strncpy(ts_data.x_label, current_dim_info[i].units, sizeof(ts_data.x_label) - 1);
+                    snprintf(ts_data.x_label, sizeof(ts_data.x_label), "%s", current_dim_info[i].units);
                 }
                 break;
             }
@@ -445,10 +445,10 @@ static void on_mouse_click(int px, int py) {
     }
 
     if (current_var->units[0]) {
-        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%s (%s)",
+        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%.120s (%.120s)",
                  current_var->name, current_var->units);
     } else {
-        strncpy(ts_data.y_label, current_var->name, sizeof(ts_data.y_label) - 1);
+        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%s", current_var->name);
     }
 
     printf("Time series: %zu points (%zu valid)\n", n_out, ts_data.n_valid);
