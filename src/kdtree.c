@@ -15,12 +15,39 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <unistd.h>
 #include <pthread.h>
 
 #define KDTREE_DIM 3
 
 /* Minimum number of points before spawning a new thread */
 #define KDTREE_THREAD_THRESHOLD 4096
+
+/* Default thread count when neither set by user nor OMP_NUM_THREADS */
+#define KDTREE_DEFAULT_THREADS 4
+
+/* Module-level thread limit: -1 means "not explicitly set" */
+static int g_max_threads = -1;
+
+void kdtree_set_max_threads(int n) {
+    if (n > 0) g_max_threads = n;
+}
+
+/* Resolve effective thread count:
+ *   1. Explicit call to kdtree_set_max_threads()
+ *   2. OMP_NUM_THREADS environment variable
+ *   3. Number of online CPUs (sysconf)
+ *   4. KDTREE_DEFAULT_THREADS
+ */
+static int get_max_threads(void) {
+    if (g_max_threads > 0) return g_max_threads;
+    const char *env = getenv("OMP_NUM_THREADS");
+    if (env) {
+        int n = atoi(env);
+        if (n > 0) return n;
+    }
+    return KDTREE_DEFAULT_THREADS;
+}
 
 /* KDTree node with hyperrectangle bounds (from libkdtree design) */
 typedef struct KDNode {
@@ -239,8 +266,8 @@ KDTree *kdtree_create(const double *points, size_t n_points) {
         }
     }
 
-    /* Build tree with up to 4 threads (cf. libkdtree: max_threads param) */
-    int max_threads = 4;
+    /* Resolve thread count: CLI > OMP_NUM_THREADS > default */
+    int max_threads = get_max_threads();
     tree->root = build_tree(tree->points, indices, n_points,
                             bb_min, bb_max, 0, max_threads);
 

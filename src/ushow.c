@@ -523,13 +523,13 @@ static void on_range_button(void) {
 
 static void on_render_mode_toggle(void) {
     if (!view) return;
-    
+
     /* In polygon-only mode, don't allow switching */
     if (options.polygon_only) {
         printf("Polygon-only mode: cannot switch to interpolate mode\n");
         return;
     }
-    
+
     int result = view_toggle_render_mode(view);
     if (result >= 0) {
         const char *mode_name = (result == RENDER_MODE_POLYGON) ? "Polygon" : "Interp";
@@ -874,6 +874,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
     fprintf(stderr, "      --light            Use light theme (default: dark)\n");
+    fprintf(stderr, "      --threads <n>      Max threads\n");
+    fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
@@ -903,6 +905,7 @@ int main(int argc, char *argv[]) {
         {"yac-3d",       no_argument,       0, 1101},
 #endif
         {"light",        no_argument,       0, 1300},
+        {"threads",      required_argument, 0, 1400},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -975,6 +978,15 @@ int main(int argc, char *argv[]) {
             case 1300:
                 x_set_light_theme();
                 break;
+            case 1400: {
+                int nt = atoi(optarg);
+                if (nt < 1) {
+                    fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
+                    return 1;
+                }
+                kdtree_set_max_threads(nt);
+                break;
+            }
             case 'h':
             default:
                 print_usage(argv[0]);

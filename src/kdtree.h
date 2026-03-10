@@ -39,4 +39,12 @@ void kdtree_free(KDTree *tree);
  */
 size_t kdtree_size(const KDTree *tree);
 
+/*
+ * Set the maximum number of threads for parallel tree construction.
+ * If never called, kdtree_create uses OMP_NUM_THREADS (if set),
+ * otherwise falls back to KDTREE_DEFAULT_THREADS (4).
+ * A value <= 0 is ignored.
+ */
+void kdtree_set_max_threads(int n);
+
 #endif /* KDTREE_H */

@@ -8,6 +8,7 @@
 #include "ushow.defines.h"
 #include "mesh.h"
 #include "regrid.h"
+#include "kdtree.h"
 #ifdef HAVE_YAC
 #include "regrid_yac.h"
 #endif
@@ -256,6 +257,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         conserv1, conserv2\n");
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
+    fprintf(stderr, "      --threads <n>      Max threads\n");
+    fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
     fprintf(stderr, "Keys:\n");
@@ -947,6 +950,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"yac-method", required_argument, 0, 1100},
         {"yac-3d", no_argument, 0, 1101},
 #endif
+        {"threads", required_argument, 0, 1400},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -1036,6 +1040,15 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
             case 1202:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
+            case 1400: {
+                int nt = atoi(optarg);
+                if (nt < 1) {
+                    fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
+                    return -1;
+                }
+                kdtree_set_max_threads(nt);
+                break;
+            }
             default:
                 print_usage(argv[0]);
                 return -1;
