@@ -14,7 +14,7 @@ NETCDF_LIBDIR := $(shell $(NC_CONFIG) --prefix 2>/dev/null)/lib
 NETCDF_RPATH := -Wl,-rpath,$(NETCDF_LIBDIR)
 
 CFLAGS += $(NETCDF_CFLAGS)
-LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) -lm
+LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) -lm -lpthread
 
 # Zarr support (optional) - build with: make WITH_ZARR=1
 ifdef WITH_ZARR
