@@ -9,6 +9,7 @@
 #include "mesh.h"
 #include "regrid.h"
 #include "kdtree.h"
+#include "common.h"
 #ifdef HAVE_YAC
 #include "regrid_yac.h"
 #endif
@@ -78,6 +79,7 @@ typedef struct {
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
     USTargetConfig target_config;
+    int user_threads;        /* CLI --threads value (0 = not set) */
 #ifdef HAVE_YAC
     int yac_method;
     int yac_3d;
@@ -96,6 +98,7 @@ static UTermOptions options = {
                        .lon_min = -180, .lon_max = 180,
                        .lat_min = -90, .lat_max = 90,
                        .cutoff_lat = 60.0 },
+    .user_threads = 0,
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -1060,7 +1063,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                     fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
                     return -1;
                 }
-                kdtree_set_max_threads(nt);
+                options.user_threads = nt;
                 break;
             }
             default:
@@ -1074,6 +1077,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         print_usage(argv[0]);
         return -1;
     }
+
+    /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
+    apply_thread_settings(options.user_threads);
 
     *first_data_arg = optind;
     return 0;

@@ -278,6 +278,7 @@ typedef struct {
     int         frame_delay_ms;     /* Animation speed */
     int         polygon_only;       /* Skip regridding, polygon mode only */
     USTargetConfig target_config;   /* Target grid configuration */
+    int         user_threads;      /* CLI --threads value (0 = not set) */
 #ifdef HAVE_YAC
     int         yac_method;        /* YAC interpolation method (-1 = disabled) */
     int         yac_3d;            /* Fractional fill-value masking */

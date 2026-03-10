@@ -179,7 +179,8 @@ SRCDIR = src
 OBJDIR = obj
 BINDIR = .
 
-COMMON_SRCS = $(SRCDIR)/kdtree.c \
+COMMON_SRCS = $(SRCDIR)/common.c \
+              $(SRCDIR)/kdtree.c \
               $(SRCDIR)/mesh.c \
               $(SRCDIR)/regrid.c \
               $(SRCDIR)/projection.c \

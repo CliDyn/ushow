@@ -19,6 +19,7 @@
 #include "file_grib.h"
 #endif
 #include "kdtree.h"
+#include "common.h"
 #include "colormaps.h"
 #include "view.h"
 #include "interface/x_interface.h"
@@ -59,6 +60,7 @@ static USOptions options = {
                        .lon_min = -180, .lon_max = 180,
                        .lat_min = -90, .lat_max = 90,
                        .cutoff_lat = 60.0 },
+    .user_threads = 0,
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -995,7 +997,7 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
                     return 1;
                 }
-                kdtree_set_max_threads(nt);
+                options.user_threads = nt;
                 break;
             }
             case 'h':
@@ -1014,6 +1016,9 @@ int main(int argc, char *argv[]) {
     /* Collect data file arguments */
     n_data_files = argc - optind;
     data_filenames = (const char **)&argv[optind];
+
+    /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
+    apply_thread_settings(options.user_threads);
 
     printf("=== ushow: Unstructured Data Viewer ===\n\n");
 
