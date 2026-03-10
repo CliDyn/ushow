@@ -6,7 +6,7 @@
 #include "test_utils.h"
 #define _USE_MATH_DEFINES
 #include <math.h>
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 #include "../src/mesh.h"
 #include <stdlib.h>
 

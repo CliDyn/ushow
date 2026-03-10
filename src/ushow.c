@@ -4,7 +4,7 @@
  * Unstructured data visualization tool
  */
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 #include "regrid.h"
 #ifdef HAVE_YAC

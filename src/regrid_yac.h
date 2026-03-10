@@ -11,7 +11,7 @@
 
 #ifdef HAVE_YAC
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 
 typedef enum {

@@ -5,7 +5,7 @@
 #ifndef VIEW_H
 #define VIEW_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Create view for displaying data.

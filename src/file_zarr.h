@@ -8,7 +8,7 @@
 #ifndef FILE_ZARR_H
 #define FILE_ZARR_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 #ifdef HAVE_ZARR
 

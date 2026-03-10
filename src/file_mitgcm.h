@@ -8,7 +8,7 @@
 #ifndef FILE_MITGCM_H
 #define FILE_MITGCM_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Check if a path looks like MITgcm data (directory with .meta files,

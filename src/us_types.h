@@ -1,11 +1,11 @@
 /*
- * ushow.defines.h - Data structures and constants for ushow
+ * us_types.h - Shared data structures and constants for ushow/uterm
  *
  * Unstructured data visualization tool
  */
 
-#ifndef USHOW_DEFINES_H
-#define USHOW_DEFINES_H
+#ifndef US_TYPES_H
+#define US_TYPES_H
 
 #include <stddef.h>
 
@@ -321,4 +321,4 @@ typedef struct {
     USColor    *colors;
 } USColormap;
 
-#endif /* USHOW_DEFINES_H */
+#endif /* US_TYPES_H */

@@ -5,7 +5,7 @@
 #ifndef COLORMAPS_H
 #define COLORMAPS_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Initialize colormaps (load built-in colormaps).

@@ -5,7 +5,7 @@
  * (netCDF/Zarr -> mesh -> regrid -> view) and renders frames as text.
  */
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 #include "regrid.h"
 #include "kdtree.h"

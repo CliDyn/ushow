@@ -6,7 +6,7 @@
 
 #include "test_framework.h"
 #include "test_utils.h"
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 #include "../src/mesh.h"
 #include "../src/regrid.h"
 #include "../src/colormaps.h"

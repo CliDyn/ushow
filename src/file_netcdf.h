@@ -5,7 +5,7 @@
 #ifndef FILE_NETCDF_H
 #define FILE_NETCDF_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Open a NetCDF file and create file structure.

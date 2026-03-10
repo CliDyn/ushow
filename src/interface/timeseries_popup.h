@@ -9,7 +9,7 @@
 #define TIMESERIES_POPUP_H
 
 #include <X11/Intrinsic.h>
-#include "../ushow.defines.h"
+#include "../us_types.h"
 
 /*
  * Initialize the timeseries popup widgets.
