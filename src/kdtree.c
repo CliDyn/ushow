@@ -1,15 +1,12 @@
 /*
  * kdtree.c - Advanced KDTree implementation for 3D nearest-neighbor queries
  *
- * Based on libkdtree by Jörg Dietrich
- * (https://github.com/joergdietrich/libkdtree)
- *
- * Key improvements over the simple median-split implementation:
- * - Hyperrectangle bounds per node for tighter search pruning
- * - Parallelized tree construction using POSIX threads
- * - Multi-dimensional distance-to-rectangle pruning in NN search
- *
- * Adapted for 3D double-precision coordinates with the same public API.
+ * Inspired by the algorithms used in libkdtree by Jörg Dietrich
+ * (https://github.com/joergdietrich/libkdtree, LGPL-2.0).
+ * No code was copied; this is an independent reimplementation using
+ * standard kd-tree techniques (hyperrectangle-bounded nodes,
+ * parallel construction, multi-dimensional pruning) adapted for
+ * 3D double-precision coordinates with the existing public API.
  */
 
 #define _GNU_SOURCE  /* for qsort_r on Linux */
