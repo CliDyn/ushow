@@ -901,11 +901,12 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  %s data.1960.nc data.1961.nc -m mesh # Multi-file explicit\n", prog);
 }
 
-int main(int argc, char *argv[]) {
-    const char *mesh_filename = NULL;
-    int n_data_files = 0;
-    const char **data_filenames = NULL;
-
+/*
+ * Parse command-line options into the global `options` struct.
+ * Returns 0 on success, >0 for clean exit (--help), <0 on error.
+ * Sets *first_data_arg to the index of the first non-option argument.
+ */
+static int parse_options(int argc, char **argv, int *first_data_arg) {
     /* Long-only option codes (above ASCII range to avoid conflicts) */
     enum {
         OPT_BOX = 256,
@@ -917,7 +918,6 @@ int main(int argc, char *argv[]) {
         OPT_LIGHT,
     };
 
-    /* Parse command line options */
     static struct option long_options[] = {
         {"mesh",         required_argument, 0, 'm'},
         {"resolution",   required_argument, 0, 'r'},
@@ -942,8 +942,8 @@ int main(int argc, char *argv[]) {
     while ((opt = getopt_long(argc, argv, "m:r:i:d:pt:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
-                mesh_filename = optarg;
                 strncpy(options.mesh_file, optarg, MAX_NAME_LEN - 1);
+                options.mesh_file[MAX_NAME_LEN - 1] = '\0';
                 break;
             case 'r':
                 options.target_resolution = atof(optarg);
@@ -967,7 +967,7 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Unknown YAC method: %s\n", optarg);
                     fprintf(stderr, "Available: nnn1, nnn4dist, nnn4gauss, "
                             "avg_arith, avg_dist, avg_bary, conserv1, conserv2\n");
-                    return 1;
+                    return -1;
                 }
                 options.yac_method = (int)ym;
                 break;
@@ -982,7 +982,7 @@ int main(int argc, char *argv[]) {
                 double w, e, s, n;
                 if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
                     fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
-                    return 1;
+                    return -1;
                 }
                 options.target_config.lon_min = w;
                 options.target_config.lon_max = e;
@@ -997,7 +997,7 @@ int main(int argc, char *argv[]) {
                     options.target_config.projection = PROJ_LAEA_SOUTH;
                 } else {
                     fprintf(stderr, "Invalid --polar value: %s (use north or south)\n", optarg);
-                    return 1;
+                    return -1;
                 }
                 break;
             case OPT_CUTOFF:
@@ -1010,27 +1010,40 @@ int main(int argc, char *argv[]) {
                 int nt = atoi(optarg);
                 if (nt < 1) {
                     fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
-                    return 1;
+                    return -1;
                 }
                 options.user_threads = nt;
                 break;
             }
             case 'h':
+                print_usage(argv[0]);
+                return 1;
             default:
                 print_usage(argv[0]);
-                return (opt == 'h') ? 0 : 1;
+                return -1;
         }
     }
 
     if (optind >= argc) {
         fprintf(stderr, "Error: No data file specified\n");
         print_usage(argv[0]);
-        return 1;
+        return -1;
     }
 
-    /* Collect data file arguments */
-    n_data_files = argc - optind;
-    data_filenames = (const char **)&argv[optind];
+    *first_data_arg = optind;
+    return 0;
+}
+
+int main(int argc, char *argv[]) {
+    int first_data_arg = 0;
+    int parse_rc = parse_options(argc, argv, &first_data_arg);
+    if (parse_rc != 0) {
+        return (parse_rc > 0) ? 0 : 1;
+    }
+
+    int n_data_files = argc - first_data_arg;
+    const char **data_filenames = (const char **)&argv[first_data_arg];
+    const char *mesh_filename = options.mesh_file[0] ? options.mesh_file : NULL;
 
     /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
     apply_thread_settings(options.user_threads);
