@@ -407,7 +407,7 @@ USFile *mitgcm_open(const char *path) {
     /* Allocate store */
     MitgcmStore *store = calloc(1, sizeof(MitgcmStore));
     if (!store) return NULL;
-    strncpy(store->directory, directory, MAX_NAME_LEN - 1);
+    snprintf(store->directory, sizeof(store->directory), "%s", directory);
     store->nx = nx;
     store->ny = ny;
     store->nz = nz;
@@ -473,7 +473,7 @@ USFile *mitgcm_open(const char *path) {
               free(store); return NULL; }
 
     f->file_type = FILE_TYPE_MITGCM;
-    strncpy(f->filename, directory, MAX_NAME_LEN - 1);
+    snprintf(f->filename, sizeof(f->filename), "%s", directory);
     f->mitgcm_data = store;
 
     return f;
@@ -487,7 +487,7 @@ USMesh *mitgcm_create_mesh(USFile *file) {
     size_t n_points = (size_t)ny * nx;
 
     /* Read XC.data and YC.data */
-    char xc_path[MAX_NAME_LEN], yc_path[MAX_NAME_LEN];
+    char xc_path[MAX_NAME_LEN + 16], yc_path[MAX_NAME_LEN + 16];
     snprintf(xc_path, sizeof(xc_path), "%s/XC.data", store->directory);
     snprintf(yc_path, sizeof(yc_path), "%s/YC.data", store->directory);
 
@@ -637,7 +637,8 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
             if (strcmp(prefixes[i], prefix) == 0) { found = 1; break; }
         }
         if (!found && n_prefixes < 64) {
-            strncpy(prefixes[n_prefixes++], prefix, MAX_NAME_LEN - 1);
+            snprintf(prefixes[n_prefixes], MAX_NAME_LEN, "%s", prefix);
+            n_prefixes++;
         }
     }
     closedir(dir);
@@ -659,7 +660,7 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
         if (!iterations || n_iters == 0) { free(iterations); continue; }
 
         /* Parse meta from first iteration to get field info */
-        char meta_path[MAX_NAME_LEN];
+        char meta_path[MAX_NAME_LEN * 2 + 32];
         snprintf(meta_path, sizeof(meta_path), "%s/%s.%010d.meta",
                  store->directory, prefixes[pi], iterations[0]);
 
@@ -683,9 +684,9 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
 
             /* Name */
             if (minfo.n_fields > 0 && minfo.fields[fi][0]) {
-                strncpy(var->name, minfo.fields[fi], MAX_NAME_LEN - 1);
+                snprintf(var->name, sizeof(var->name), "%s", minfo.fields[fi]);
             } else {
-                strncpy(var->name, prefixes[pi], MAX_NAME_LEN - 1);
+                snprintf(var->name, sizeof(var->name), "%s", prefixes[pi]);
             }
 
             var->mesh = m;
@@ -726,7 +727,7 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
             /* Private data */
             MitgcmVarData *vd = calloc(1, sizeof(MitgcmVarData));
             if (!vd) { free(var); continue; }
-            strncpy(vd->prefix, prefixes[pi], MAX_NAME_LEN - 1);
+            snprintf(vd->prefix, sizeof(vd->prefix), "%s", prefixes[pi]);
             vd->field_index = fi;
             vd->iterations = malloc(n_iters * sizeof(int));
             if (vd->iterations) {
@@ -801,7 +802,7 @@ int mitgcm_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data
     if ((int)time_idx >= vd->n_iterations) return -1;
 
     /* Build data file path */
-    char data_path[MAX_NAME_LEN];
+    char data_path[MAX_NAME_LEN * 2 + 32];
     snprintf(data_path, sizeof(data_path), "%s/%s.%010d.data",
              store->directory, vd->prefix, vd->iterations[time_idx]);
 
@@ -1054,7 +1055,7 @@ int mitgcm_read_timeseries(USVar *var, size_t node_idx, size_t depth_idx,
         times[t] = (double)vd->iterations[t];
 
         /* Build path and read single value */
-        char data_path[MAX_NAME_LEN];
+        char data_path[MAX_NAME_LEN * 2 + 32];
         snprintf(data_path, sizeof(data_path), "%s/%s.%010d.data",
                  store->directory, vd->prefix, vd->iterations[t]);
 

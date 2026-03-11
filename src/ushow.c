@@ -4,7 +4,7 @@
  * Unstructured data visualization tool
  */
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 #include "regrid.h"
 #ifdef HAVE_YAC
@@ -19,6 +19,7 @@
 #include "file_grib.h"
 #endif
 #include "kdtree.h"
+#include "common.h"
 #include "colormaps.h"
 #include "view.h"
 #include "interface/x_interface.h"
@@ -50,6 +51,21 @@ static USDimInfo *current_dim_info = NULL;
 static int n_current_dims = 0;
 
 /* Options */
+typedef struct {
+    int         debug;
+    double      influence_radius;   /* Regrid influence radius in meters */
+    double      target_resolution;  /* Target grid resolution in degrees */
+    char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
+    int         frame_delay_ms;     /* Animation speed */
+    int         polygon_only;       /* Skip regridding, polygon mode only */
+    USTargetConfig target_config;   /* Target grid configuration */
+    int         user_threads;      /* CLI --threads value (0 = not set) */
+#ifdef HAVE_YAC
+    int         yac_method;        /* YAC interpolation method (-1 = disabled) */
+    int         yac_3d;            /* Fractional fill-value masking */
+#endif
+} USOptions;
+
 static USOptions options = {
     .debug = 0,
     .influence_radius = DEFAULT_INFLUENCE_RADIUS_M,
@@ -59,6 +75,7 @@ static USOptions options = {
                        .lon_min = -180, .lon_max = 180,
                        .lat_min = -90, .lat_max = 90,
                        .cutoff_lat = 60.0 },
+    .user_threads = 0,
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -70,7 +87,6 @@ static void update_display(void);
 static void animation_tick(void);
 static void update_dim_info_current(void);
 static void update_dim_label(void);
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
 static void on_mouse_click(int px, int py);
 
 /* Callbacks */
@@ -402,10 +418,10 @@ static void on_mouse_click(int px, int py) {
 
     /* Build title */
     if (current_var->units[0]) {
-        snprintf(ts_data.title, sizeof(ts_data.title), "%s (%s) at %.2f, %.2f",
+        snprintf(ts_data.title, sizeof(ts_data.title), "%.200s (%.200s) at %.2f, %.2f",
                  current_var->name, current_var->units, lon, lat);
     } else {
-        snprintf(ts_data.title, sizeof(ts_data.title), "%s at %.2f, %.2f",
+        snprintf(ts_data.title, sizeof(ts_data.title), "%.200s at %.2f, %.2f",
                  current_var->name, lon, lat);
     }
 
@@ -418,7 +434,7 @@ static void on_mouse_click(int px, int py) {
         for (int i = 0; i < n_current_dims; i++) {
             if (strcmp(current_dim_info[i].name, time_dim_name) == 0) {
                 if (current_dim_info[i].units[0]) {
-                    strncpy(ts_data.x_label, current_dim_info[i].units, sizeof(ts_data.x_label) - 1);
+                    snprintf(ts_data.x_label, sizeof(ts_data.x_label), "%s", current_dim_info[i].units);
                 }
                 break;
             }
@@ -429,10 +445,10 @@ static void on_mouse_click(int px, int py) {
     }
 
     if (current_var->units[0]) {
-        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%s (%s)",
+        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%.120s (%.120s)",
                  current_var->name, current_var->units);
     } else {
-        strncpy(ts_data.y_label, current_var->name, sizeof(ts_data.y_label) - 1);
+        snprintf(ts_data.y_label, sizeof(ts_data.y_label), "%s", current_var->name);
     }
 
     printf("Time series: %zu points (%zu valid)\n", n_out, ts_data.n_valid);
@@ -523,13 +539,13 @@ static void on_range_button(void) {
 
 static void on_render_mode_toggle(void) {
     if (!view) return;
-    
+
     /* In polygon-only mode, don't allow switching */
     if (options.polygon_only) {
         printf("Polygon-only mode: cannot switch to interpolate mode\n");
         return;
     }
-    
+
     int result = view_toggle_render_mode(view);
     if (result >= 0) {
         const char *mode_name = (result == RENDER_MODE_POLYGON) ? "Polygon" : "Interp";
@@ -613,105 +629,6 @@ static void update_dim_info_current(void) {
         x_update_dim_current(dim_idx, current_idx, current_val);
         dim_idx++;
     }
-}
-
-static int parse_time_units(const char *units, double *unit_seconds,
-                            int *y, int *mo, int *d, int *h, int *mi, double *sec) {
-    if (!units || !unit_seconds || !y || !mo || !d || !h || !mi || !sec) return 0;
-
-    const char *since = strstr(units, "since");
-    if (!since) return 0;
-
-    char unit_buf[32] = {0};
-    if (sscanf(units, "%31s", unit_buf) != 1) return 0;
-
-    /* Normalize unit token to lower case */
-    for (char *p = unit_buf; *p; ++p) {
-        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
-    }
-
-    if (strcmp(unit_buf, "seconds") == 0 || strcmp(unit_buf, "second") == 0 ||
-        strcmp(unit_buf, "secs") == 0 || strcmp(unit_buf, "sec") == 0 || strcmp(unit_buf, "s") == 0) {
-        *unit_seconds = 1.0;
-    } else if (strcmp(unit_buf, "minutes") == 0 || strcmp(unit_buf, "minute") == 0 ||
-               strcmp(unit_buf, "mins") == 0 || strcmp(unit_buf, "min") == 0) {
-        *unit_seconds = 60.0;
-    } else if (strcmp(unit_buf, "hours") == 0 || strcmp(unit_buf, "hour") == 0 ||
-               strcmp(unit_buf, "hrs") == 0 || strcmp(unit_buf, "hr") == 0) {
-        *unit_seconds = 3600.0;
-    } else if (strcmp(unit_buf, "days") == 0 || strcmp(unit_buf, "day") == 0) {
-        *unit_seconds = 86400.0;
-    } else {
-        return 0;
-    }
-
-    /* Parse origin date/time after "since" */
-    const char *p = since + 5;
-    while (*p == ' ') p++;
-    int n = sscanf(p, "%d-%d-%d %d:%d:%lf", y, mo, d, h, mi, sec);
-    if (n < 3) return 0;
-    if (n == 3) { *h = 0; *mi = 0; *sec = 0.0; }
-    return 1;
-}
-
-static int64_t days_from_civil(int y, unsigned m, unsigned d) {
-    y -= m <= 2;
-    const int era = (y >= 0 ? y : y - 399) / 400;
-    const unsigned yoe = (unsigned)(y - era * 400);
-    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return (int64_t)(era * 146097 + (int)doe - 719468);
-}
-
-static void civil_from_days(int64_t z, int *y, unsigned *m, unsigned *d) {
-    z += 719468;
-    const int era = (z >= 0 ? z : z - 146096) / 146097;
-    const unsigned doe = (unsigned)(z - era * 146097);
-    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int y_tmp = (int)(yoe) + era * 400;
-    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const unsigned mp = (5 * doy + 2) / 153;
-    const unsigned d_tmp = doy - (153 * mp + 2) / 5 + 1;
-    const unsigned m_tmp = mp + (mp < 10 ? 3 : -9);
-    y_tmp += (m_tmp <= 2);
-
-    *y = y_tmp;
-    *m = m_tmp;
-    *d = d_tmp;
-}
-
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units) {
-    double unit_seconds = 0.0;
-    int y, mo, d, h, mi;
-    double sec;
-    if (!parse_time_units(units, &unit_seconds, &y, &mo, &d, &h, &mi, &sec)) {
-        return 0;
-    }
-
-    int64_t days = days_from_civil(y, (unsigned)mo, (unsigned)d);
-    double total_sec = (double)days * 86400.0 + (double)h * 3600.0 + (double)mi * 60.0 + sec;
-    total_sec += value * unit_seconds;
-
-    int64_t out_days = (int64_t)(total_sec / 86400.0);
-    double rem = total_sec - (double)out_days * 86400.0;
-    if (rem < 0) {
-        rem += 86400.0;
-        out_days -= 1;
-    }
-
-    int out_y;
-    unsigned out_m, out_d;
-    civil_from_days(out_days, &out_y, &out_m, &out_d);
-
-    int out_h = (int)(rem / 3600.0);
-    rem -= out_h * 3600.0;
-    int out_mi = (int)(rem / 60.0);
-    rem -= out_mi * 60.0;
-    int out_s = (int)(rem + 0.5);
-
-    snprintf(out, outlen, "%04d-%02u-%02u %02d:%02d:%02d",
-             out_y, out_m, out_d, out_h, out_mi, out_s);
-    return 1;
 }
 
 static const USDimInfo *find_dim_info_for_dim(const char *dim_name) {
@@ -874,6 +791,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
     fprintf(stderr, "      --light            Use light theme (default: dark)\n");
+    fprintf(stderr, "  -t, --threads <n>      Max threads\n");
+    fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s data.nc                           # Single file\n", prog);
@@ -882,37 +801,49 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  %s data.1960.nc data.1961.nc -m mesh # Multi-file explicit\n", prog);
 }
 
-int main(int argc, char *argv[]) {
-    const char *mesh_filename = NULL;
-    int n_data_files = 0;
-    const char **data_filenames = NULL;
+/*
+ * Parse command-line options into the global `options` struct.
+ * Returns 0 on success, >0 for clean exit (--help), <0 on error.
+ * Sets *first_data_arg to the index of the first non-option argument.
+ */
+static int parse_options(int argc, char **argv, int *first_data_arg) {
+    /* Long-only option codes (above ASCII range to avoid conflicts) */
+    enum {
+        OPT_BOX = 256,
+        OPT_POLAR,
+        OPT_CUTOFF,
+        OPT_YAC,
+        OPT_YAC_METHOD,
+        OPT_YAC_3D,
+        OPT_LIGHT,
+    };
 
-    /* Parse command line options */
     static struct option long_options[] = {
         {"mesh",         required_argument, 0, 'm'},
         {"resolution",   required_argument, 0, 'r'},
         {"influence",    required_argument, 0, 'i'},
         {"delay",        required_argument, 0, 'd'},
         {"polygon-only", no_argument,       0, 'p'},
-        {"box",          required_argument, 0, 1200},
-        {"polar",        required_argument, 0, 1201},
-        {"cutoff",       required_argument, 0, 1202},
+        {"box",          required_argument, 0, OPT_BOX},
+        {"polar",        required_argument, 0, OPT_POLAR},
+        {"cutoff",       required_argument, 0, OPT_CUTOFF},
 #ifdef HAVE_YAC
-        {"yac",          no_argument,       0, 1099},
-        {"yac-method",   required_argument, 0, 1100},
-        {"yac-3d",       no_argument,       0, 1101},
+        {"yac",          no_argument,       0, OPT_YAC},
+        {"yac-method",   required_argument, 0, OPT_YAC_METHOD},
+        {"yac-3d",       no_argument,       0, OPT_YAC_3D},
 #endif
-        {"light",        no_argument,       0, 1300},
+        {"light",        no_argument,       0, OPT_LIGHT},
+        {"threads",      required_argument, 0, 't'},
         {"help",         no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:ph", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:pt:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
-                mesh_filename = optarg;
                 strncpy(options.mesh_file, optarg, MAX_NAME_LEN - 1);
+                options.mesh_file[MAX_NAME_LEN - 1] = '\0';
                 break;
             case 'r':
                 options.target_resolution = atof(optarg);
@@ -927,31 +858,31 @@ int main(int argc, char *argv[]) {
                 options.polygon_only = 1;
                 break;
 #ifdef HAVE_YAC
-            case 1099:
+            case OPT_YAC:
                 options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
-            case 1100: {
+            case OPT_YAC_METHOD: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {
                     fprintf(stderr, "Unknown YAC method: %s\n", optarg);
                     fprintf(stderr, "Available: nnn1, nnn4dist, nnn4gauss, "
                             "avg_arith, avg_dist, avg_bary, conserv1, conserv2\n");
-                    return 1;
+                    return -1;
                 }
                 options.yac_method = (int)ym;
                 break;
             }
-            case 1101:
+            case OPT_YAC_3D:
                 options.yac_3d = 1;
                 if (options.yac_method < 0)
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
-            case 1200: {
+            case OPT_BOX: {
                 double w, e, s, n;
                 if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
                     fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
-                    return 1;
+                    return -1;
                 }
                 options.target_config.lon_min = w;
                 options.target_config.lon_max = e;
@@ -959,38 +890,63 @@ int main(int argc, char *argv[]) {
                 options.target_config.lat_max = n;
                 break;
             }
-            case 1201:
+            case OPT_POLAR:
                 if (strcmp(optarg, "north") == 0) {
                     options.target_config.projection = PROJ_LAEA_NORTH;
                 } else if (strcmp(optarg, "south") == 0) {
                     options.target_config.projection = PROJ_LAEA_SOUTH;
                 } else {
                     fprintf(stderr, "Invalid --polar value: %s (use north or south)\n", optarg);
-                    return 1;
+                    return -1;
                 }
                 break;
-            case 1202:
+            case OPT_CUTOFF:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
-            case 1300:
+            case OPT_LIGHT:
                 x_set_light_theme();
                 break;
+            case 't': {
+                int nt = atoi(optarg);
+                if (nt < 1) {
+                    fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
+                    return -1;
+                }
+                options.user_threads = nt;
+                break;
+            }
             case 'h':
+                print_usage(argv[0]);
+                return 1;
             default:
                 print_usage(argv[0]);
-                return (opt == 'h') ? 0 : 1;
+                return -1;
         }
     }
 
     if (optind >= argc) {
         fprintf(stderr, "Error: No data file specified\n");
         print_usage(argv[0]);
-        return 1;
+        return -1;
     }
 
-    /* Collect data file arguments */
-    n_data_files = argc - optind;
-    data_filenames = (const char **)&argv[optind];
+    *first_data_arg = optind;
+    return 0;
+}
+
+int main(int argc, char *argv[]) {
+    int first_data_arg = 0;
+    int parse_rc = parse_options(argc, argv, &first_data_arg);
+    if (parse_rc != 0) {
+        return (parse_rc > 0) ? 0 : 1;
+    }
+
+    int n_data_files = argc - first_data_arg;
+    const char **data_filenames = (const char **)&argv[first_data_arg];
+    const char *mesh_filename = options.mesh_file[0] ? options.mesh_file : NULL;
+
+    /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
+    apply_thread_settings(options.user_threads);
 
     printf("=== ushow: Unstructured Data Viewer ===\n\n");
 

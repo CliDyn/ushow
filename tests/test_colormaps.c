@@ -3,7 +3,7 @@
  */
 
 #include "test_framework.h"
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 #include "../src/colormaps.h"
 #include <stdlib.h>
 #include <string.h>

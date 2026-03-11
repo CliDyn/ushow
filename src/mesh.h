@@ -5,7 +5,7 @@
 #ifndef MESH_H
 #define MESH_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Convert longitude/latitude to Cartesian on unit sphere.

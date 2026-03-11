@@ -5,9 +5,11 @@
  * (netCDF/Zarr -> mesh -> regrid -> view) and renders frames as text.
  */
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 #include "regrid.h"
+#include "kdtree.h"
+#include "common.h"
 #ifdef HAVE_YAC
 #include "regrid_yac.h"
 #endif
@@ -45,8 +47,6 @@
 #define CP_LOWER_HALF_BLOCK 0x2584
 #define CP_FULL_BLOCK 0x2588
 
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units);
-
 /* Global state */
 static USFile *file = NULL;
 static USFileSet *fileset = NULL;
@@ -77,6 +77,7 @@ typedef struct {
     char mesh_file[MAX_NAME_LEN];
     char glyph_ramp[128];
     USTargetConfig target_config;
+    int user_threads;        /* CLI --threads value (0 = not set) */
 #ifdef HAVE_YAC
     int yac_method;
     int yac_3d;
@@ -95,6 +96,7 @@ static UTermOptions options = {
                        .lon_min = -180, .lon_max = 180,
                        .lat_min = -90, .lat_max = 90,
                        .cutoff_lat = 60.0 },
+    .user_threads = 0,
 #ifdef HAVE_YAC
     .yac_method = -1,
     .yac_3d = 0,
@@ -256,6 +258,8 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "                         conserv1, conserv2\n");
     fprintf(stderr, "      --yac-3d           Fractional fill-value masking for 3D variables\n");
 #endif
+    fprintf(stderr, "  -t, --threads <n>      Max threads\n");
+    fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
     fprintf(stderr, "Keys:\n");
@@ -394,84 +398,6 @@ static void save_frame(void) {
     }
 }
 
-static int parse_time_units(const char *units, double *unit_seconds,
-                            int *origin_year, int *origin_month, int *origin_day,
-                            int *origin_hour, int *origin_minute, int *origin_second) {
-    if (!units || !unit_seconds || !origin_year || !origin_month || !origin_day ||
-        !origin_hour || !origin_minute || !origin_second) {
-        return 0;
-    }
-
-    const char *since = strstr(units, " since ");
-    if (!since) return 0;
-
-    if (strncmp(units, "days", since - units) == 0) {
-        *unit_seconds = 86400.0;
-    } else if (strncmp(units, "day", since - units) == 0) {
-        *unit_seconds = 86400.0;
-    } else if (strncmp(units, "hours", since - units) == 0) {
-        *unit_seconds = 3600.0;
-    } else if (strncmp(units, "hour", since - units) == 0) {
-        *unit_seconds = 3600.0;
-    } else if (strncmp(units, "minutes", since - units) == 0) {
-        *unit_seconds = 60.0;
-    } else if (strncmp(units, "minute", since - units) == 0) {
-        *unit_seconds = 60.0;
-    } else if (strncmp(units, "seconds", since - units) == 0) {
-        *unit_seconds = 1.0;
-    } else if (strncmp(units, "second", since - units) == 0) {
-        *unit_seconds = 1.0;
-    } else {
-        return 0;
-    }
-
-    const char *origin = since + strlen(" since ");
-    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
-    if (sscanf(origin, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &s) < 3) {
-        return 0;
-    }
-
-    *origin_year = y;
-    *origin_month = mo;
-    *origin_day = d;
-    *origin_hour = h;
-    *origin_minute = mi;
-    *origin_second = s;
-    return 1;
-}
-
-static int format_time_from_units(char *out, size_t outlen, double value, const char *units) {
-    if (!out || outlen == 0 || !units) return 0;
-
-    double unit_seconds = 0.0;
-    int y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
-    if (!parse_time_units(units, &unit_seconds, &y, &mo, &d, &h, &mi, &s)) {
-        return 0;
-    }
-
-    struct tm origin_tm = {0};
-    origin_tm.tm_year = y - 1900;
-    origin_tm.tm_mon = mo - 1;
-    origin_tm.tm_mday = d;
-    origin_tm.tm_hour = h;
-    origin_tm.tm_min = mi;
-    origin_tm.tm_sec = s;
-
-    time_t origin_time = timegm(&origin_tm);
-    if (origin_time == (time_t)-1) return 0;
-
-    double total_seconds = value * unit_seconds;
-    time_t target_time = origin_time + (time_t)llround(total_seconds);
-    struct tm result_tm;
-    if (!gmtime_r(&target_time, &result_tm)) return 0;
-
-    if (result_tm.tm_hour == 0 && result_tm.tm_min == 0 && result_tm.tm_sec == 0) {
-        return strftime(out, outlen, "%Y-%m-%d", &result_tm) > 0;
-    }
-
-    return strftime(out, outlen, "%Y-%m-%d %H:%M:%S", &result_tm) > 0;
-}
-
 static void render_frame(int show_help, int animating) {
     if (!view || !current_var) return;
 
@@ -519,7 +445,7 @@ static void render_frame(int show_help, int animating) {
                     strncpy(time_stamp, formatted, sizeof(time_stamp) - 1);
                     time_stamp[sizeof(time_stamp) - 1] = '\0';
                 } else if (current_dim_info[i].units[0]) {
-                    snprintf(time_stamp, sizeof(time_stamp), " %.6g %s",
+                    snprintf(time_stamp, sizeof(time_stamp), " %.6g %.44s",
                              v, current_dim_info[i].units);
                 } else {
                     snprintf(time_stamp, sizeof(time_stamp), " %.6g", v);
@@ -930,29 +856,44 @@ static void cleanup_all(void) {
 }
 
 static int parse_options(int argc, char **argv, int *first_data_arg) {
+    /* Long-only option codes (above ASCII range to avoid conflicts) */
+    enum {
+        OPT_CHARS = 256,
+        OPT_COLOR,
+        OPT_NO_COLOR,
+        OPT_RENDER,
+        OPT_BOX,
+        OPT_POLAR,
+        OPT_CUTOFF,
+        OPT_YAC,
+        OPT_YAC_METHOD,
+        OPT_YAC_3D,
+    };
+
     static struct option long_options[] = {
         {"mesh", required_argument, 0, 'm'},
         {"resolution", required_argument, 0, 'r'},
         {"influence", required_argument, 0, 'i'},
         {"delay", required_argument, 0, 'd'},
-        {"chars", required_argument, 0, 1000},
-        {"render", required_argument, 0, 1003},
-        {"color", no_argument, 0, 1001},
-        {"no-color", no_argument, 0, 1002},
-        {"box",    required_argument, 0, 1200},
-        {"polar",  required_argument, 0, 1201},
-        {"cutoff", required_argument, 0, 1202},
+        {"chars", required_argument, 0, OPT_CHARS},
+        {"render", required_argument, 0, OPT_RENDER},
+        {"color", no_argument, 0, OPT_COLOR},
+        {"no-color", no_argument, 0, OPT_NO_COLOR},
+        {"box",    required_argument, 0, OPT_BOX},
+        {"polar",  required_argument, 0, OPT_POLAR},
+        {"cutoff", required_argument, 0, OPT_CUTOFF},
 #ifdef HAVE_YAC
-        {"yac",          no_argument,       0, 1099},
-        {"yac-method", required_argument, 0, 1100},
-        {"yac-3d", no_argument, 0, 1101},
+        {"yac",          no_argument,       0, OPT_YAC},
+        {"yac-method", required_argument, 0, OPT_YAC_METHOD},
+        {"yac-3d", no_argument, 0, OPT_YAC_3D},
 #endif
+        {"threads", required_argument, 0, 't'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:t:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
                 strncpy(options.mesh_file, optarg, MAX_NAME_LEN - 1);
@@ -971,11 +912,11 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
             case 'h':
                 print_usage(argv[0]);
                 return 1;
-            case 1000:
+            case OPT_CHARS:
                 strncpy(options.glyph_ramp, optarg, sizeof(options.glyph_ramp) - 1);
                 options.glyph_ramp[sizeof(options.glyph_ramp) - 1] = '\0';
                 break;
-            case 1003: {
+            case OPT_RENDER: {
                 int mode = TERM_RENDER_ASCII;
                 if (term_parse_render_mode(optarg, &mode) != 0) {
                     fprintf(stderr, "Invalid render mode: %s (use ascii|half|braille)\n", optarg);
@@ -984,17 +925,17 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.render_mode = mode;
                 break;
             }
-            case 1001:
+            case OPT_COLOR:
                 options.color_mode = 1;
                 break;
-            case 1002:
+            case OPT_NO_COLOR:
                 options.color_mode = 0;
                 break;
 #ifdef HAVE_YAC
-            case 1099:
+            case OPT_YAC:
                 options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
-            case 1100: {
+            case OPT_YAC_METHOD: {
                 USYacMethod ym;
                 if (yac_method_parse(optarg, &ym) != 0) {
                     fprintf(stderr, "Unknown YAC method: %s\n", optarg);
@@ -1005,13 +946,13 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.yac_method = (int)ym;
                 break;
             }
-            case 1101:
+            case OPT_YAC_3D:
                 options.yac_3d = 1;
                 if (options.yac_method < 0)
                     options.yac_method = (int)YAC_METHOD_AVERAGE_ARITH;
                 break;
 #endif
-            case 1200: {
+            case OPT_BOX: {
                 double w, e, s, n;
                 if (sscanf(optarg, "%lf,%lf,%lf,%lf", &w, &e, &s, &n) != 4) {
                     fprintf(stderr, "Invalid --box format, use W,E,S,N (e.g. -10,30,35,70)\n");
@@ -1023,7 +964,7 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.target_config.lat_max = n;
                 break;
             }
-            case 1201:
+            case OPT_POLAR:
                 if (strcmp(optarg, "north") == 0) {
                     options.target_config.projection = PROJ_LAEA_NORTH;
                 } else if (strcmp(optarg, "south") == 0) {
@@ -1033,9 +974,18 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                     return -1;
                 }
                 break;
-            case 1202:
+            case OPT_CUTOFF:
                 options.target_config.cutoff_lat = atof(optarg);
                 break;
+            case 't': {
+                int nt = atoi(optarg);
+                if (nt < 1) {
+                    fprintf(stderr, "Invalid --threads value: %s (must be >= 1)\n", optarg);
+                    return -1;
+                }
+                options.user_threads = nt;
+                break;
+            }
             default:
                 print_usage(argv[0]);
                 return -1;
@@ -1047,6 +997,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         print_usage(argv[0]);
         return -1;
     }
+
+    /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
+    apply_thread_settings(options.user_threads);
 
     *first_data_arg = optind;
     return 0;

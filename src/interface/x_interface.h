@@ -5,7 +5,7 @@
 #ifndef X_INTERFACE_H
 #define X_INTERFACE_H
 
-#include "../ushow.defines.h"
+#include "../us_types.h"
 
 /*
  * Set light theme (call before x_init). Default is dark theme.

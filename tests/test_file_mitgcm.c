@@ -6,7 +6,7 @@
  */
 
 #include "test_framework.h"
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 #include "../src/file_mitgcm.h"
 #include "../src/mesh.h"
 #include <stdlib.h>

@@ -16,6 +16,7 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.copilot-project-context.md
 
 # Generated outputs
 *.ppm

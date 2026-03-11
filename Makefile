@@ -3,13 +3,12 @@
 # Unstructured data visualization tool
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g
+CFLAGS = -Wall -Wextra -O2 -g -fopenmp
 # --enable-new-dtags is Linux-only, skip on macOS (Darwin)
 UNAME_S := $(shell uname -s)
-ifneq ($(UNAME_S),Darwin)
-LDFLAGS = -Wl,--enable-new-dtags
-else
-LDFLAGS =
+LDFLAGS = -fopenmp
+ifeq ($(UNAME_S),Darwin)
+LDFLAGS += -Wl,--enable-new-dtags
 endif
 
 # NetCDF - try DKRZ system installation first, fall back to system nc-config
@@ -71,7 +70,7 @@ endif
 BASE_CFLAGS = $(CFLAGS) $(NETCDF_CFLAGS)
 X11_FULL_CFLAGS = $(X11_CFLAGS) $(BASE_CFLAGS)
 
-COMMON_LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) -lm
+COMMON_LIBS = $(NETCDF_LIBS) $(NETCDF_RPATH) -lm -lpthread
 USHOW_LIBS = $(COMMON_LIBS) $(X11_LIBS) $(X11_RPATH)
 UTERM_LIBS = $(COMMON_LIBS)
 
@@ -179,7 +178,8 @@ SRCDIR = src
 OBJDIR = obj
 BINDIR = .
 
-COMMON_SRCS = $(SRCDIR)/kdtree.c \
+COMMON_SRCS = $(SRCDIR)/common.c \
+              $(SRCDIR)/kdtree.c \
               $(SRCDIR)/mesh.c \
               $(SRCDIR)/regrid.c \
               $(SRCDIR)/projection.c \
@@ -263,29 +263,29 @@ clean:
 	rm -f uterm
 
 # Dependencies
-$(OBJDIR)/ushow.o: $(SRCDIR)/ushow.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h \
+$(OBJDIR)/ushow.o: $(SRCDIR)/ushow.c $(SRCDIR)/us_types.h $(SRCDIR)/mesh.h \
                    $(SRCDIR)/regrid.h $(SRCDIR)/file_netcdf.h $(SRCDIR)/colormaps.h \
                    $(SRCDIR)/view.h $(SRCDIR)/interface/x_interface.h
-$(OBJDIR)/uterm.o: $(SRCDIR)/uterm.c $(SRCDIR)/ushow.defines.h $(SRCDIR)/mesh.h \
+$(OBJDIR)/uterm.o: $(SRCDIR)/uterm.c $(SRCDIR)/us_types.h $(SRCDIR)/mesh.h \
                    $(SRCDIR)/regrid.h $(SRCDIR)/file_netcdf.h $(SRCDIR)/colormaps.h \
                    $(SRCDIR)/term_render_mode.h \
                    $(SRCDIR)/view.h
 $(OBJDIR)/term_render_mode.o: $(SRCDIR)/term_render_mode.c $(SRCDIR)/term_render_mode.h
 $(OBJDIR)/kdtree.o: $(SRCDIR)/kdtree.c $(SRCDIR)/kdtree.h
-$(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/mesh.o: $(SRCDIR)/mesh.c $(SRCDIR)/mesh.h $(SRCDIR)/us_types.h
 $(OBJDIR)/regrid.o: $(SRCDIR)/regrid.c $(SRCDIR)/regrid.h $(SRCDIR)/mesh.h \
-                    $(SRCDIR)/kdtree.h $(SRCDIR)/projection.h $(SRCDIR)/ushow.defines.h
-$(OBJDIR)/projection.o: $(SRCDIR)/projection.c $(SRCDIR)/projection.h $(SRCDIR)/ushow.defines.h
-$(OBJDIR)/file_netcdf.o: $(SRCDIR)/file_netcdf.c $(SRCDIR)/file_netcdf.h $(SRCDIR)/ushow.defines.h
-$(OBJDIR)/file_mitgcm.o: $(SRCDIR)/file_mitgcm.c $(SRCDIR)/file_mitgcm.h $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
-$(OBJDIR)/colormaps.o: $(SRCDIR)/colormaps.c $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h
+                    $(SRCDIR)/kdtree.h $(SRCDIR)/projection.h $(SRCDIR)/us_types.h
+$(OBJDIR)/projection.o: $(SRCDIR)/projection.c $(SRCDIR)/projection.h $(SRCDIR)/us_types.h
+$(OBJDIR)/file_netcdf.o: $(SRCDIR)/file_netcdf.c $(SRCDIR)/file_netcdf.h $(SRCDIR)/us_types.h
+$(OBJDIR)/file_mitgcm.o: $(SRCDIR)/file_mitgcm.c $(SRCDIR)/file_mitgcm.h $(SRCDIR)/mesh.h $(SRCDIR)/us_types.h
+$(OBJDIR)/colormaps.o: $(SRCDIR)/colormaps.c $(SRCDIR)/colormaps.h $(SRCDIR)/us_types.h
 $(OBJDIR)/view.o: $(SRCDIR)/view.c $(SRCDIR)/view.h $(SRCDIR)/file_netcdf.h \
-                  $(SRCDIR)/regrid.h $(SRCDIR)/colormaps.h $(SRCDIR)/ushow.defines.h
+                  $(SRCDIR)/regrid.h $(SRCDIR)/colormaps.h $(SRCDIR)/us_types.h
 $(OBJDIR)/interface/x_interface.o: $(SRCDIR)/interface/x_interface.c \
                                     $(SRCDIR)/interface/x_interface.h \
                                     $(SRCDIR)/interface/colorbar.h \
                                     $(SRCDIR)/interface/timeseries_popup.h \
-                                    $(SRCDIR)/ushow.defines.h
+                                    $(SRCDIR)/us_types.h
 $(OBJDIR)/interface/colorbar.o: $(SRCDIR)/interface/colorbar.c \
                                  $(SRCDIR)/interface/colorbar.h $(SRCDIR)/colormaps.h
 $(OBJDIR)/interface/range_popup.o: $(SRCDIR)/interface/range_popup.c \
@@ -295,25 +295,25 @@ $(OBJDIR)/interface/range_utils.o: $(SRCDIR)/interface/range_utils.c \
                                     $(SRCDIR)/interface/range_utils.h
 $(OBJDIR)/interface/timeseries_popup.o: $(SRCDIR)/interface/timeseries_popup.c \
                                          $(SRCDIR)/interface/timeseries_popup.h \
-                                         $(SRCDIR)/ushow.defines.h
+                                         $(SRCDIR)/us_types.h
 
 # Zarr dependencies (when WITH_ZARR is set)
 ifdef WITH_ZARR
-$(OBJDIR)/file_zarr.o: $(SRCDIR)/file_zarr.c $(SRCDIR)/file_zarr.h $(SRCDIR)/ushow.defines.h \
+$(OBJDIR)/file_zarr.o: $(SRCDIR)/file_zarr.c $(SRCDIR)/file_zarr.h $(SRCDIR)/us_types.h \
                         $(SRCDIR)/cJSON/cJSON.h
 $(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c $(SRCDIR)/cJSON/cJSON.h
 endif
 
 # GRIB dependencies (when WITH_GRIB is set)
 ifdef WITH_GRIB
-$(OBJDIR)/file_grib.o: $(SRCDIR)/file_grib.c $(SRCDIR)/file_grib.h $(SRCDIR)/ushow.defines.h
+$(OBJDIR)/file_grib.o: $(SRCDIR)/file_grib.c $(SRCDIR)/file_grib.h $(SRCDIR)/us_types.h
 endif
 
 # YAC dependencies (when WITH_YAC is set)
 ifdef WITH_YAC
 $(OBJDIR)/regrid_yac.o: $(SRCDIR)/regrid_yac.c $(SRCDIR)/regrid_yac.h \
-                         $(SRCDIR)/healpix.h $(SRCDIR)/mesh.h $(SRCDIR)/ushow.defines.h
-$(OBJDIR)/healpix.o: $(SRCDIR)/healpix.c $(SRCDIR)/healpix.h $(SRCDIR)/ushow.defines.h
+                         $(SRCDIR)/healpix.h $(SRCDIR)/mesh.h $(SRCDIR)/us_types.h
+$(OBJDIR)/healpix.o: $(SRCDIR)/healpix.c $(SRCDIR)/healpix.h $(SRCDIR)/us_types.h
 endif
 
 # Print configuration

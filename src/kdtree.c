@@ -1,22 +1,61 @@
 /*
- * kdtree.c - Simple KDTree implementation for 3D nearest-neighbor queries
+ * kdtree.c - Advanced KDTree implementation for 3D nearest-neighbor queries
  *
- * Uses median-split construction and recursive nearest-neighbor search.
- * Optimized for the case of building once and querying many times.
+ * Inspired by the algorithms used in libkdtree by Jörg Dietrich
+ * (https://github.com/joergdietrich/libkdtree, LGPL-2.0).
+ * No code was copied; this is an independent reimplementation using
+ * standard kd-tree techniques (hyperrectangle-bounded nodes,
+ * parallel construction, multi-dimensional pruning) adapted for
+ * 3D double-precision coordinates with the existing public API.
  */
 
+#define _GNU_SOURCE  /* for qsort_r on Linux */
 #include "kdtree.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #define KDTREE_DIM 3
 
-/* KDTree node */
+/* Minimum number of points before spawning a new thread */
+#define KDTREE_THREAD_THRESHOLD 4096
+
+/* Default thread count when neither set by user nor OMP_NUM_THREADS */
+#define KDTREE_DEFAULT_THREADS 4
+
+/* Module-level thread limit: -1 means "not explicitly set" */
+static int g_max_threads = -1;
+
+void kdtree_set_max_threads(int n) {
+    if (n > 0) g_max_threads = n;
+}
+
+/* Resolve effective thread count:
+ *   1. Explicit call to kdtree_set_max_threads()
+ *   2. OMP_NUM_THREADS environment variable
+ *   3. Number of online CPUs (sysconf)
+ *   4. KDTREE_DEFAULT_THREADS
+ */
+static int get_max_threads(void) {
+    if (g_max_threads > 0) return g_max_threads;
+    const char *env = getenv("OMP_NUM_THREADS");
+    if (env) {
+        int n = atoi(env);
+        if (n > 0) return n;
+    }
+    return KDTREE_DEFAULT_THREADS;
+}
+
+/* KDTree node with hyperrectangle bounds (from libkdtree design) */
 typedef struct KDNode {
-    size_t          idx;        /* Original point index */
-    double          point[KDTREE_DIM];
+    size_t          idx;                  /* Original point index */
+    double          location[KDTREE_DIM]; /* Node position */
+    double          hr_min[KDTREE_DIM];   /* Hyperrectangle min bounds */
+    double          hr_max[KDTREE_DIM];   /* Hyperrectangle max bounds */
+    int             split;                /* Split axis */
     struct KDNode  *left;
     struct KDNode  *right;
 } KDNode;
@@ -28,55 +67,165 @@ struct KDTree {
     double     *points;         /* Copy of original points */
 };
 
-/* Comparison context for qsort */
+/* Thread argument for parallel tree construction (from libkdtree design) */
+typedef struct {
+    const double   *points;
+    size_t         *indices;
+    size_t          n;
+    double          hr_min[KDTREE_DIM];
+    double          hr_max[KDTREE_DIM];
+    int             depth;
+    int             max_threads;
+} KDBuildArg;
+
+/* -------------------------------------------------------------------
+ * Comparison for qsort_r (thread-safe, no global state)
+ * ------------------------------------------------------------------- */
+
 typedef struct {
     const double *points;
     int axis;
-} SortContext;
+} SortCtx;
 
-static SortContext sort_ctx;
-
-/* Comparison function for sorting indices by coordinate */
-static int compare_by_axis(const void *a, const void *b) {
+static int compare_by_axis_r(const void *a, const void *b, void *arg) {
+    SortCtx *ctx = (SortCtx *)arg;
     size_t ia = *(const size_t *)a;
     size_t ib = *(const size_t *)b;
-    double va = sort_ctx.points[ia * KDTREE_DIM + sort_ctx.axis];
-    double vb = sort_ctx.points[ib * KDTREE_DIM + sort_ctx.axis];
+    double va = ctx->points[ia * KDTREE_DIM + ctx->axis];
+    double vb = ctx->points[ib * KDTREE_DIM + ctx->axis];
     if (va < vb) return -1;
-    if (va > vb) return 1;
+    if (va > vb) return  1;
     return 0;
 }
 
-/* Build KDTree recursively */
-static KDNode *build_tree(const double *points, size_t *indices,
-                          size_t n, int depth) {
+/* -------------------------------------------------------------------
+ * Squared Euclidean distance
+ * ------------------------------------------------------------------- */
+
+static inline double dist_sq(const double *a, const double *b) {
+    double dx = a[0] - b[0];
+    double dy = a[1] - b[1];
+    double dz = a[2] - b[2];
+    return dx*dx + dy*dy + dz*dz;
+}
+
+/* -------------------------------------------------------------------
+ * Minimum squared distance from a point to a hyperrectangle.
+ * This is the key pruning improvement: instead of checking only the
+ * split-axis distance (simple impl) or the distance to the further
+ * node's split-axis bounds (original libkdtree), we compute the true
+ * minimum distance across all dimensions.
+ * ------------------------------------------------------------------- */
+
+static inline double min_dist_sq_to_hr(const double *query,
+                                       const double *hr_min,
+                                       const double *hr_max) {
+    double dsq = 0.0;
+    for (int d = 0; d < KDTREE_DIM; d++) {
+        if (query[d] < hr_min[d]) {
+            double diff = hr_min[d] - query[d];
+            dsq += diff * diff;
+        } else if (query[d] > hr_max[d]) {
+            double diff = query[d] - hr_max[d];
+            dsq += diff * diff;
+        }
+    }
+    return dsq;
+}
+
+/* -------------------------------------------------------------------
+ * Tree construction (adapted from libkdtree: kd_doBuildTree)
+ *
+ * Each node stores the bounding hyperrectangle for its subtree,
+ * enabling tighter pruning during nearest-neighbor search.
+ * Construction can be parallelized across POSIX threads.
+ * ------------------------------------------------------------------- */
+
+static KDNode *build_tree(const double *points, size_t *indices, size_t n,
+                          const double *hr_min, const double *hr_max,
+                          int depth, int max_threads);
+static void *build_tree_thread(void *arg);
+
+static KDNode *build_tree(const double *points, size_t *indices, size_t n,
+                          const double *hr_min, const double *hr_max,
+                          int depth, int max_threads) {
     if (n == 0) return NULL;
 
     int axis = depth % KDTREE_DIM;
 
-    /* Sort indices by current axis */
-    sort_ctx.points = points;
-    sort_ctx.axis = axis;
-    qsort(indices, n, sizeof(size_t), compare_by_axis);
+    /* Thread-safe sort by current axis (cf. libkdtree pmergesort) */
+    SortCtx ctx = { .points = points, .axis = axis };
+    qsort_r(indices, n, sizeof(size_t), compare_by_axis_r, &ctx);
 
-    /* Find median */
     size_t median = n / 2;
 
-    /* Create node */
+    /* Allocate node with hyperrectangle bounds (cf. libkdtree kd_allocNode) */
     KDNode *node = malloc(sizeof(KDNode));
     if (!node) return NULL;
 
-    node->idx = indices[median];
-    node->point[0] = points[node->idx * KDTREE_DIM + 0];
-    node->point[1] = points[node->idx * KDTREE_DIM + 1];
-    node->point[2] = points[node->idx * KDTREE_DIM + 2];
+    node->idx   = indices[median];
+    node->split = axis;
+    memcpy(node->location, &points[node->idx * KDTREE_DIM],
+           KDTREE_DIM * sizeof(double));
+    memcpy(node->hr_min, hr_min, KDTREE_DIM * sizeof(double));
+    memcpy(node->hr_max, hr_max, KDTREE_DIM * sizeof(double));
+    node->left  = NULL;
+    node->right = NULL;
 
-    /* Build subtrees */
-    node->left = build_tree(points, indices, median, depth + 1);
-    node->right = build_tree(points, indices + median + 1, n - median - 1, depth + 1);
+    if (n == 1) return node;
+
+    /* Child hyperrectangle bounds split at the median's coordinate
+     * (cf. libkdtree: tmpMaxLeft[sortaxis] = node->location[sortaxis]) */
+    double left_max[KDTREE_DIM], right_min[KDTREE_DIM];
+    memcpy(left_max,  hr_max,  KDTREE_DIM * sizeof(double));
+    memcpy(right_min, hr_min,  KDTREE_DIM * sizeof(double));
+    left_max[axis]  = node->location[axis];
+    right_min[axis] = node->location[axis];
+
+    /* Parallel construction (cf. libkdtree: pthread_create in kd_doBuildTree) */
+    if (max_threads > 1 && n > KDTREE_THREAD_THRESHOLD) {
+        KDBuildArg left_arg = {
+            .points      = points,
+            .indices     = indices,
+            .n           = median,
+            .depth       = depth + 1,
+            .max_threads = max_threads / 2
+        };
+        memcpy(left_arg.hr_min, hr_min,   KDTREE_DIM * sizeof(double));
+        memcpy(left_arg.hr_max, left_max, KDTREE_DIM * sizeof(double));
+
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, build_tree_thread, &left_arg) == 0) {
+            /* Build right subtree in this thread */
+            node->right = build_tree(points, indices + median + 1,
+                                     n - median - 1, right_min, hr_max,
+                                     depth + 1, max_threads / 2);
+            pthread_join(tid, (void **)&node->left);
+        } else {
+            /* pthread_create failed – fall back to sequential */
+            goto sequential;
+        }
+    } else {
+sequential:
+        node->left  = build_tree(points, indices, median,
+                                 hr_min, left_max, depth + 1, max_threads);
+        node->right = build_tree(points, indices + median + 1,
+                                 n - median - 1, right_min, hr_max,
+                                 depth + 1, max_threads);
+    }
 
     return node;
 }
+
+static void *build_tree_thread(void *arg) {
+    KDBuildArg *d = (KDBuildArg *)arg;
+    return build_tree(d->points, d->indices, d->n,
+                      d->hr_min, d->hr_max, d->depth, d->max_threads);
+}
+
+/* -------------------------------------------------------------------
+ * Public: create tree
+ * ------------------------------------------------------------------- */
 
 KDTree *kdtree_create(const double *points, size_t n_points) {
     if (!points || n_points == 0) return NULL;
@@ -101,12 +250,26 @@ KDTree *kdtree_create(const double *points, size_t n_points) {
         free(tree);
         return NULL;
     }
+
+    /* Compute bounding hyperrectangle (cf. libkdtree: min/max args) */
+    double bb_min[KDTREE_DIM], bb_max[KDTREE_DIM];
+    for (int d = 0; d < KDTREE_DIM; d++) {
+        bb_min[d] =  DBL_MAX;
+        bb_max[d] = -DBL_MAX;
+    }
     for (size_t i = 0; i < n_points; i++) {
         indices[i] = i;
+        for (int d = 0; d < KDTREE_DIM; d++) {
+            double v = points[i * KDTREE_DIM + d];
+            if (v < bb_min[d]) bb_min[d] = v;
+            if (v > bb_max[d]) bb_max[d] = v;
+        }
     }
 
-    /* Build tree */
-    tree->root = build_tree(tree->points, indices, n_points, 0);
+    /* Resolve thread count: CLI > OMP_NUM_THREADS > default */
+    int max_threads = get_max_threads();
+    tree->root = build_tree(tree->points, indices, n_points,
+                            bb_min, bb_max, 0, max_threads);
 
     free(indices);
 
@@ -119,39 +282,45 @@ KDTree *kdtree_create(const double *points, size_t n_points) {
     return tree;
 }
 
-/* Squared Euclidean distance */
-static inline double dist_sq(const double *a, const double *b) {
-    double dx = a[0] - b[0];
-    double dy = a[1] - b[1];
-    double dz = a[2] - b[2];
-    return dx*dx + dy*dy + dz*dz;
-}
+/* -------------------------------------------------------------------
+ * Nearest-neighbor search (adapted from libkdtree: kd_nearest)
+ *
+ * Uses hyperrectangle bounds to prune the further subtree: if the
+ * minimum distance from the query to the further child's bounding
+ * box exceeds the current best, the entire subtree is skipped.
+ * ------------------------------------------------------------------- */
 
-/* Recursive nearest neighbor search */
 static void search_nearest(const KDNode *node, const double *query,
-                           int depth, size_t *best_idx, double *best_dist_sq) {
+                           size_t *best_idx, double *best_dist_sq) {
     if (!node) return;
 
     /* Check current node */
-    double d = dist_sq(node->point, query);
+    double d = dist_sq(node->location, query);
     if (d < *best_dist_sq) {
         *best_dist_sq = d;
         *best_idx = node->idx;
     }
 
-    /* Determine which subtree to search first */
-    int axis = depth % KDTREE_DIM;
-    double diff = query[axis] - node->point[axis];
-
-    KDNode *first = (diff < 0) ? node->left : node->right;
-    KDNode *second = (diff < 0) ? node->right : node->left;
+    /* Determine nearer / further subtree (cf. libkdtree kd_nearest) */
+    const KDNode *nearer, *further;
+    if (query[node->split] < node->location[node->split]) {
+        nearer  = node->left;
+        further = node->right;
+    } else {
+        nearer  = node->right;
+        further = node->left;
+    }
 
     /* Search closer subtree first */
-    search_nearest(first, query, depth + 1, best_idx, best_dist_sq);
+    search_nearest(nearer, query, best_idx, best_dist_sq);
 
-    /* Check if we need to search the other subtree */
-    if (diff * diff < *best_dist_sq) {
-        search_nearest(second, query, depth + 1, best_idx, best_dist_sq);
+    /* Prune using minimum distance to further child's hyperrectangle.
+     * This is tighter than the single-axis check in the simple
+     * implementation, and uses all dimensions unlike the original
+     * libkdtree which only checked the split axis. */
+    if (further && min_dist_sq_to_hr(query, further->hr_min,
+                                     further->hr_max) < *best_dist_sq) {
+        search_nearest(further, query, best_idx, best_dist_sq);
     }
 }
 
@@ -163,16 +332,19 @@ void kdtree_query_nearest(const KDTree *tree, const double *query,
         return;
     }
 
-    *nn_dist = DBL_MAX;
+    double best_dist_sq = DBL_MAX;
     *nn_idx = 0;
 
-    search_nearest(tree->root, query, 0, nn_idx, nn_dist);
+    search_nearest(tree->root, query, nn_idx, &best_dist_sq);
 
     /* Return actual distance (not squared) */
-    *nn_dist = sqrt(*nn_dist);
+    *nn_dist = sqrt(best_dist_sq);
 }
 
-/* Free tree recursively */
+/* -------------------------------------------------------------------
+ * Cleanup (cf. libkdtree: kd_destroyTree / kd_freeNode)
+ * ------------------------------------------------------------------- */
+
 static void free_node(KDNode *node) {
     if (!node) return;
     free_node(node->left);

@@ -5,7 +5,7 @@
  */
 
 #include "test_framework.h"
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 
 #ifdef HAVE_ZARR
 

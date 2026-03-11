@@ -11,7 +11,7 @@
  */
 
 #include "test_framework.h"
-#include "../src/ushow.defines.h"
+#include "../src/us_types.h"
 #include "../src/mesh.h"
 #include "../src/projection.h"
 #include "../src/regrid_yac.h"

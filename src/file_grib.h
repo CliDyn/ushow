@@ -8,7 +8,7 @@
 #ifndef FILE_GRIB_H
 #define FILE_GRIB_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 #ifdef HAVE_GRIB
 

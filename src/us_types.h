@@ -1,11 +1,11 @@
 /*
- * ushow.defines.h - Data structures and constants for ushow
+ * us_types.h - Shared data structures and constants for ushow/uterm
  *
  * Unstructured data visualization tool
  */
 
-#ifndef USHOW_DEFINES_H
-#define USHOW_DEFINES_H
+#ifndef US_TYPES_H
+#define US_TYPES_H
 
 #include <stddef.h>
 
@@ -269,21 +269,6 @@ struct USView {
     int         frame_delay_ms;
 };
 
-/* Global options */
-typedef struct {
-    int         debug;
-    double      influence_radius;   /* Regrid influence radius in meters */
-    double      target_resolution;  /* Target grid resolution in degrees */
-    char        mesh_file[MAX_NAME_LEN];  /* Separate mesh file path */
-    int         frame_delay_ms;     /* Animation speed */
-    int         polygon_only;       /* Skip regridding, polygon mode only */
-    USTargetConfig target_config;   /* Target grid configuration */
-#ifdef HAVE_YAC
-    int         yac_method;        /* YAC interpolation method (-1 = disabled) */
-    int         yac_3d;            /* Fractional fill-value masking */
-#endif
-} USOptions;
-
 /* Dimension info for display */
 typedef struct {
     char        name[MAX_NAME_LEN];     /* Dimension name (e.g., "time", "depth") */
@@ -320,4 +305,4 @@ typedef struct {
     USColor    *colors;
 } USColormap;
 
-#endif /* USHOW_DEFINES_H */
+#endif /* US_TYPES_H */

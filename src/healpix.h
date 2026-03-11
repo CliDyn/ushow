@@ -9,7 +9,7 @@
 #ifndef HEALPIX_H
 #define HEALPIX_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Generate triangular element connectivity for a mesh whose points are

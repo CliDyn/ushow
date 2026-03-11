@@ -5,7 +5,7 @@
 #ifndef REGRID_H
 #define REGRID_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 #include "mesh.h"
 
 /*

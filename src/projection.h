@@ -5,7 +5,7 @@
 #ifndef PROJECTION_H
 #define PROJECTION_H
 
-#include "ushow.defines.h"
+#include "us_types.h"
 
 /*
  * Initialize target config with global equirectangular defaults.
