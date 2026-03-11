@@ -3,13 +3,12 @@
 # Unstructured data visualization tool
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g
+CFLAGS = -Wall -Wextra -O2 -g -fopenmp
 # --enable-new-dtags is Linux-only, skip on macOS (Darwin)
 UNAME_S := $(shell uname -s)
-ifneq ($(UNAME_S),Darwin)
-LDFLAGS = -Wl,--enable-new-dtags
-else
-LDFLAGS =
+LDFLAGS = -fopenmp
+ifeq ($(UNAME_S),Darwin)
+LDFLAGS += -Wl,--enable-new-dtags
 endif
 
 # NetCDF - try DKRZ system installation first, fall back to system nc-config
