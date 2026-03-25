@@ -38,6 +38,10 @@ typedef struct {
     float *angle_cs;             /* AngleCS[ny*nx], NULL if unavailable */
     float *angle_sn;             /* AngleSN[ny*nx], NULL if unavailable */
     float missing_value;
+    double delta_t;              /* Model timestep in seconds (from stdout) */
+    int start_date_1;            /* YYYYMMDD (from stdout) */
+    int start_date_2;            /* HHMMSS  (from stdout) */
+    int has_calendar;            /* 1 if startDate + deltaT were found */
 } MitgcmStore;
 
 typedef struct {
@@ -325,6 +329,70 @@ int mitgcm_is_mitgcm(const char *path) {
     return 0;
 }
 
+/*
+ * Parse startDate_1, startDate_2 and deltaT from a MITgcm stdout file.
+ * Lines look like:
+ *   (PID.TID 0000.0001) > startDate_1=19580101,
+ *   (PID.TID 0000.0001) > startDate_2=000000,
+ *   (PID.TID 0000.0001) > deltaT    = 3600.,
+ */
+static void parse_stdout_calendar(const char *filepath, MitgcmStore *store) {
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) return;
+
+    char line[512];
+    int got_date1 = 0, got_date2 = 0, got_dt = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        char *p;
+        if (!got_date1 && (p = strstr(line, "startDate_1")) != NULL) {
+            /* Find '=' then parse integer */
+            p = strchr(p, '=');
+            if (p) { store->start_date_1 = atoi(p + 1); got_date1 = 1; }
+        }
+        if (!got_date2 && (p = strstr(line, "startDate_2")) != NULL) {
+            p = strchr(p, '=');
+            if (p) { store->start_date_2 = atoi(p + 1); got_date2 = 1; }
+        }
+        if (!got_dt && (p = strstr(line, "deltaT")) != NULL) {
+            /* Skip lines that contain deltaTClock or deltaTMom etc. */
+            char after = p[6];
+            if (after == ' ' || after == '\t' || after == '=') {
+                p = strchr(p, '=');
+                if (p) { store->delta_t = atof(p + 1); got_dt = 1; }
+            }
+        }
+        if (got_date1 && got_date2 && got_dt) break;
+    }
+    fclose(fp);
+
+    if (got_date1 && got_dt && store->delta_t > 0) {
+        store->has_calendar = 1;
+        int d1 = store->start_date_1;
+        int d2 = store->start_date_2;
+        printf("MITgcm: calendar from %s: %08d %06d, deltaT=%.0f s\n",
+               filepath, d1, d2, store->delta_t);
+    }
+}
+
+/* Scan directory for stdout.* or STDOUT.* and try to parse calendar info */
+static void scan_stdout_for_calendar(const char *directory, MitgcmStore *store) {
+    DIR *dir = opendir(directory);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "stdout.", 7) == 0 ||
+            strncmp(entry->d_name, "STDOUT.", 7) == 0) {
+            char path[MAX_NAME_LEN * 2];
+            snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+            parse_stdout_calendar(path, store);
+            if (store->has_calendar) break;
+        }
+    }
+    closedir(dir);
+}
+
 USFile *mitgcm_open(const char *path) {
     if (!path) return NULL;
 
@@ -412,6 +480,9 @@ USFile *mitgcm_open(const char *path) {
     store->ny = ny;
     store->nz = nz;
     store->missing_value = -999.0f;
+
+    /* Try to find calendar info from stdout files */
+    scan_stdout_for_calendar(directory, store);
 
     /* Read RC.data for depth values */
     if (nz > 0) {
@@ -990,18 +1061,40 @@ USDimInfo *mitgcm_get_dim_info(USVar *var, int *n_dims_out) {
 
     int idx = 0;
 
-    /* Time dimension (iteration numbers) */
+    /* Time dimension */
     if (var->time_dim_id >= 0) {
         USDimInfo *di = &dims[idx++];
         strncpy(di->name, "time", MAX_NAME_LEN - 1);
-        strncpy(di->units, "iteration", MAX_NAME_LEN - 1);
         di->size = vd->n_iterations;
         di->is_scannable = (vd->n_iterations > 1);
         di->values = malloc(vd->n_iterations * sizeof(double));
-        if (di->values) {
+
+        if (store->has_calendar && di->values) {
+            /* Convert iterations to seconds since start date */
+            int d1 = store->start_date_1;
+            int d2 = store->start_date_2;
+            int yr = d1 / 10000;
+            int mo = (d1 / 100) % 100;
+            int dy = d1 % 100;
+            int hh = d2 / 10000;
+            int mm = (d2 / 100) % 100;
+            int ss = d2 % 100;
+            snprintf(di->units, MAX_NAME_LEN,
+                     "seconds since %04d-%02d-%02d %02d:%02d:%02d",
+                     yr, mo, dy, hh, mm, ss);
             for (int i = 0; i < vd->n_iterations; i++) {
-                di->values[i] = (double)vd->iterations[i];
+                di->values[i] = (double)vd->iterations[i] * store->delta_t;
             }
+        } else {
+            strncpy(di->units, "iteration", MAX_NAME_LEN - 1);
+            if (di->values) {
+                for (int i = 0; i < vd->n_iterations; i++) {
+                    di->values[i] = (double)vd->iterations[i];
+                }
+            }
+        }
+
+        if (di->values) {
             di->min_val = di->values[0];
             di->max_val = di->values[vd->n_iterations - 1];
         }

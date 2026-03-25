@@ -963,6 +963,273 @@ TEST(mitgcm_no_rotation_without_angles) {
     return 1;
 }
 
+/* ---- Pickup file exclusion ---- */
+
+static int create_pickup_files(int iteration) {
+    char path[512];
+    char meta_buf[1024];
+
+    /* pickup file */
+    snprintf(path, sizeof(path), "%s/pickup.%010d.meta", test_dir, iteration);
+    snprintf(meta_buf, sizeof(meta_buf),
+        " nDims = [   3 ];\n"
+        " dimList = [\n"
+        "    4,    1,    4,\n"
+        "    3,    1,    3,\n"
+        "    2,    1,    2\n"
+        " ];\n"
+        " dataprec = [ 'float32' ];\n"
+        " nrecords = [          2 ];\n"
+        " timeStepNumber = [ %d ];\n"
+        " nFlds = [    2 ];\n"
+        " fldList = {\n"
+        " 'Uvel    ' 'Vvel    '\n"
+        " };\n", iteration);
+    write_meta(path, meta_buf);
+
+    size_t total = 2 * TEST_NZ * TEST_SLAB;
+    float *data = calloc(total, sizeof(float));
+    if (!data) return -1;
+    snprintf(path, sizeof(path), "%s/pickup.%010d.data", test_dir, iteration);
+    int rc = write_binary(path, data, total);
+    free(data);
+    if (rc != 0) return -1;
+
+    /* pickup_ggl90 file */
+    snprintf(path, sizeof(path), "%s/pickup_ggl90.%010d.meta", test_dir, iteration);
+    snprintf(meta_buf, sizeof(meta_buf),
+        " nDims = [   3 ];\n"
+        " dimList = [\n"
+        "    4,    1,    4,\n"
+        "    3,    1,    3,\n"
+        "    2,    1,    2\n"
+        " ];\n"
+        " dataprec = [ 'float32' ];\n"
+        " nrecords = [          1 ];\n"
+        " timeStepNumber = [ %d ];\n"
+        " nFlds = [    1 ];\n"
+        " fldList = {\n"
+        " 'GGL90TKE'\n"
+        " };\n", iteration);
+    write_meta(path, meta_buf);
+
+    data = calloc(TEST_NZ * TEST_SLAB, sizeof(float));
+    if (!data) return -1;
+    snprintf(path, sizeof(path), "%s/pickup_ggl90.%010d.data", test_dir, iteration);
+    rc = write_binary(path, data, TEST_NZ * TEST_SLAB);
+    free(data);
+    return rc;
+}
+
+TEST(mitgcm_pickup_excluded) {
+    setup_test_dir();
+    ASSERT_EQ(create_grid_xy(), 0);
+    ASSERT_EQ(create_rc(), 0);
+    ASSERT_EQ(create_hfac(), 0);
+    ASSERT_EQ(create_diag2d(100), 0);
+    ASSERT_EQ(create_pickup_files(100), 0);
+
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    /* Verify no pickup-derived variables exist */
+    for (USVar *v = vars; v; v = v->next) {
+        /* pickup and pickup_ggl90 fields should not appear */
+        ASSERT_TRUE(strcmp(v->name, "Uvel") != 0);
+        ASSERT_TRUE(strcmp(v->name, "Vvel") != 0);
+        ASSERT_TRUE(strcmp(v->name, "GGL90TKE") != 0);
+    }
+
+    /* But normal diagnostic variables should still be present */
+    USVar *etan = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "ETAN") == 0) { etan = v; break; }
+    }
+    ASSERT_NOT_NULL(etan);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+/* ---- Stdout calendar parsing ---- */
+
+static int create_stdout_file(const char *filename,
+                              int date1, int date2, double dt) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", test_dir, filename);
+    FILE *fp = fopen(path, "w");
+    if (!fp) return -1;
+    fprintf(fp,
+        "(PID.TID 0000.0001) // ======================================================\n"
+        "(PID.TID 0000.0001) // Parameter file \"data\"\n"
+        "(PID.TID 0000.0001) > startDate_1=%d,\n"
+        "(PID.TID 0000.0001) > startDate_2=%06d,\n"
+        "(PID.TID 0000.0001) > deltaT    = %.1f,\n"
+        "(PID.TID 0000.0001) // ======================================================\n",
+        date1, date2, dt);
+    fclose(fp);
+    return 0;
+}
+
+TEST(mitgcm_stdout_calendar) {
+    setup_test_dir();
+    ASSERT_EQ(create_grid_xy(), 0);
+    ASSERT_EQ(create_rc(), 0);
+    ASSERT_EQ(create_hfac(), 0);
+    ASSERT_EQ(create_diag2d(100), 0);
+    ASSERT_EQ(create_diag2d(200), 0);
+    ASSERT_EQ(create_stdout_file("STDOUT.0000", 19580101, 0, 3600.0), 0);
+
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *etan = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "ETAN") == 0) { etan = v; break; }
+    }
+    ASSERT_NOT_NULL(etan);
+
+    int n_dims = 0;
+    USDimInfo *dims = mitgcm_get_dim_info(etan, &n_dims);
+    ASSERT_NOT_NULL(dims);
+    ASSERT_GE(n_dims, 1);
+    ASSERT_STR_EQ(dims[0].name, "time");
+
+    /* Units should be CF-style "seconds since ..." */
+    ASSERT_STR_EQ(dims[0].units, "seconds since 1958-01-01 00:00:00");
+
+    /* Time values: iteration * deltaT = 100*3600, 200*3600 */
+    ASSERT_NOT_NULL(dims[0].values);
+    ASSERT_NEAR(dims[0].values[0], 360000.0, 0.01);
+    ASSERT_NEAR(dims[0].values[1], 720000.0, 0.01);
+
+    mitgcm_free_dim_info(dims, n_dims);
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+TEST(mitgcm_no_stdout_uses_iterations) {
+    /* Without stdout file, time values should remain as iteration numbers */
+    ASSERT_EQ(create_full_dataset(), 0);
+
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *etan = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "ETAN") == 0) { etan = v; break; }
+    }
+    ASSERT_NOT_NULL(etan);
+
+    int n_dims = 0;
+    USDimInfo *dims = mitgcm_get_dim_info(etan, &n_dims);
+    ASSERT_NOT_NULL(dims);
+    ASSERT_STR_EQ(dims[0].units, "iteration");
+    ASSERT_NEAR(dims[0].values[0], 100.0, 0.01);
+    ASSERT_NEAR(dims[0].values[1], 200.0, 0.01);
+
+    mitgcm_free_dim_info(dims, n_dims);
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
+/* ---- Embedded velocity pairing (SIuice/SIvice) ---- */
+
+static int create_seaice_vel_diag(int iteration, float uval, float vval) {
+    char path[512];
+    char meta_buf[1024];
+
+    snprintf(path, sizeof(path), "%s/diagSeaice.%010d.meta", test_dir, iteration);
+    snprintf(meta_buf, sizeof(meta_buf),
+        " nDims = [   2 ];\n"
+        " dimList = [\n"
+        "    4,    1,    4,\n"
+        "    3,    1,    3\n"
+        " ];\n"
+        " dataprec = [ 'float32' ];\n"
+        " nrecords = [          2 ];\n"
+        " timeStepNumber = [ %d ];\n"
+        " nFlds = [    2 ];\n"
+        " fldList = {\n"
+        " 'SIuice  ' 'SIvice  '\n"
+        " };\n", iteration);
+    write_meta(path, meta_buf);
+
+    size_t total = 2 * TEST_SLAB;
+    float *data = malloc(total * sizeof(float));
+    if (!data) return -1;
+
+    for (int i = 0; i < TEST_SLAB; i++) data[i] = uval;
+    for (int i = 0; i < TEST_SLAB; i++) data[TEST_SLAB + i] = vval;
+
+    snprintf(path, sizeof(path), "%s/diagSeaice.%010d.data", test_dir, iteration);
+    int rc = write_binary(path, data, total);
+    free(data);
+    return rc;
+}
+
+TEST(mitgcm_seaice_velocity_pairing) {
+    setup_test_dir();
+    ASSERT_EQ(create_grid_xy(), 0);
+    ASSERT_EQ(create_rc(), 0);
+    ASSERT_EQ(create_hfac(), 0);
+    ASSERT_EQ(create_angle_cs_sn(0.6f, 0.8f), 0);
+    ASSERT_EQ(create_seaice_vel_diag(100, 5.0f, 0.0f), 0);
+
+    USFile *f = mitgcm_open(test_dir);
+    ASSERT_NOT_NULL(f);
+    USMesh *m = mitgcm_create_mesh(f);
+    ASSERT_NOT_NULL(m);
+    USVar *vars = mitgcm_scan_variables(f, m);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find SIuice and SIvice */
+    USVar *siuice = NULL, *sivice = NULL;
+    for (USVar *v = vars; v; v = v->next) {
+        if (strcmp(v->name, "SIuice") == 0) siuice = v;
+        if (strcmp(v->name, "SIvice") == 0) sivice = v;
+    }
+    ASSERT_NOT_NULL(siuice);
+    ASSERT_NOT_NULL(sivice);
+
+    /* Verify rotation is applied by reading rotated values.
+     * If pairing works, SIuice/SIvice get rotated just like UVEL/VVEL. */
+
+    /* Read rotated SIuice: u_east = CS*U - SN*V = 0.6*5.0 - 0.8*0.0 = 3.0 */
+    float data[TEST_SLAB];
+    int rc = mitgcm_read_slice(siuice, 0, 0, data);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_NEAR(data[1], 3.0f, 0.01);  /* ocean point */
+
+    /* Read rotated SIvice: v_north = SN*U + CS*V = 0.8*5.0 + 0.6*0.0 = 4.0 */
+    rc = mitgcm_read_slice(sivice, 0, 0, data);
+    ASSERT_EQ_INT(rc, 0);
+    ASSERT_NEAR(data[1], 4.0f, 0.01);
+
+    mesh_free(m);
+    mitgcm_close(f);
+    cleanup_test_dir();
+    return 1;
+}
+
 /* Close null */
 
 TEST(mitgcm_close_null) {

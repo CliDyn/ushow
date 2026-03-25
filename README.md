@@ -485,7 +485,9 @@ With `--yac-3d`, ushow generates a dynamic fractional mask from the source field
   - Automatic land masking via hFacC grid file
   - Depth levels from RC grid file
   - Multi-timestep iteration discovery
-  - Automatic velocity rotation on LLC/cubed-sphere grids: if AngleCS/AngleSN (or CS/SN) grid files are present, UVEL/VVEL and other paired velocity fields are rotated from local grid coordinates to geographic (eastward/northward) components
+  - Automatic calendar detection from MITgcm stdout files: if `stdout.*` or `STDOUT.*` files are present, parses `startDate_1`, `startDate_2`, and `deltaT` to display proper dates instead of iteration numbers
+  - Automatic velocity rotation on LLC/cubed-sphere grids: if AngleCS/AngleSN (or CS/SN) grid files are present, velocity pairs (UVEL/VVEL, SIuice/SIvice, EXFuwind/EXFvwind, etc.) are rotated from local grid coordinates to geographic (eastward/northward) components
+  - Pickup/restart files are automatically excluded from variable scanning
 - **Zarr**: v2 format (requires `make WITH_ZARR=1`)
   - Compression: LZ4, Blosc (with various inner codecs), or uncompressed
   - Data types: Float32, Float64, Int64
