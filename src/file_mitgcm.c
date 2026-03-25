@@ -761,31 +761,43 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
         free(iterations);
     }
 
-    /* Detect velocity components and pair U/V variables */
+    /* Detect velocity components and pair U/V variables.
+     * Handles both leading-letter patterns (UVEL/VVEL) and
+     * embedded u/v patterns (SIuice/SIvice, EXFuwind/EXFvwind). */
     if (store->angle_cs) {
-        /* Mark velocity components by name */
-        for (USVar *v = head; v; v = v->next) {
-            MitgcmVarData *d = (MitgcmVarData *)v->mitgcm_data;
-            if (v->name[0] == 'U') d->velocity_component = 1;
-            else if (v->name[0] == 'V') d->velocity_component = 2;
-        }
-
-        /* Pair U/V variables: same prefix, name differs only in first char */
+        /* Try to pair variables: for each variable containing 'u' or 'U',
+         * look for a matching variable with 'v'/'V' at the same position */
         for (USVar *u = head; u; u = u->next) {
             MitgcmVarData *ud = (MitgcmVarData *)u->mitgcm_data;
-            if (ud->velocity_component != 1 || ud->paired_velocity) continue;
+            if (ud->velocity_component) continue;  /* already paired */
 
-            for (USVar *v = head; v; v = v->next) {
-                MitgcmVarData *vvd = (MitgcmVarData *)v->mitgcm_data;
-                if (vvd->velocity_component != 2 || vvd->paired_velocity) continue;
-                if (strcmp(ud->prefix, vvd->prefix) != 0) continue;
-                if (strcmp(u->name + 1, v->name + 1) != 0) continue;
+            /* Find position where u/U occurs and could indicate velocity */
+            size_t ulen = strlen(u->name);
+            for (size_t pos = 0; pos < ulen; pos++) {
+                if (u->name[pos] != 'U' && u->name[pos] != 'u') continue;
 
-                ud->paired_velocity = v;
-                vvd->paired_velocity = u;
-                printf("MITgcm: paired %s / %s for rotation\n", u->name, v->name);
-                break;
+                /* Build candidate V-name by replacing u->U with v->V */
+                char vname[MAX_NAME_LEN];
+                memcpy(vname, u->name, ulen + 1);
+                vname[pos] = (u->name[pos] == 'U') ? 'V' : 'v';
+
+                /* Search for matching V variable */
+                for (USVar *v = head; v; v = v->next) {
+                    MitgcmVarData *vvd = (MitgcmVarData *)v->mitgcm_data;
+                    if (vvd->velocity_component) continue;
+                    if (strcmp(v->name, vname) != 0) continue;
+                    if (strcmp(ud->prefix, vvd->prefix) != 0) continue;
+
+                    ud->velocity_component = 1;
+                    vvd->velocity_component = 2;
+                    ud->paired_velocity = v;
+                    vvd->paired_velocity = u;
+                    printf("MITgcm: paired %s / %s for rotation\n",
+                           u->name, v->name);
+                    goto next_u;
+                }
             }
+            next_u:;
         }
     }
 
