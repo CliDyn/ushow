@@ -631,6 +631,10 @@ USVar *mitgcm_scan_variables(USFile *f, USMesh *m) {
         memcpy(prefix, entry->d_name, plen);
         prefix[plen] = '\0';
 
+        /* Skip pickup files (MITgcm restart/checkpoint files) */
+        if (strncmp(prefix, "pickup", 6) == 0 &&
+            (prefix[6] == '\0' || prefix[6] == '_')) continue;
+
         /* Check uniqueness */
         int found = 0;
         for (int i = 0; i < n_prefixes; i++) {
