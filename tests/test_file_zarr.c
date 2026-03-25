@@ -1336,6 +1336,660 @@ TEST(zarr_fileset_boundary_read) {
     return 1;
 }
 
+/* ---- Structured grid zarr tests (1D structured + 2D curvilinear) ---- */
+
+/*
+ * Create a zarr store with a structured grid (1D lat/lon with different sizes).
+ * lat has ny values, lon has nx values, data has shape [n_times, ny, nx].
+ * This tests meshgrid expansion in mesh_create_from_zarr.
+ */
+static const char *create_structured_zarr_store(int nx, int ny, int n_times) {
+    static char store_path[256];
+    snprintf(store_path, sizeof(store_path), "/tmp/test_ushow_zarr_struct_%d_%d.zarr",
+             getpid(), zarr_test_counter++);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+    int ret = system(cmd);
+    (void)ret;
+
+    if (mkdir(store_path, 0755) != 0) return NULL;
+    if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return NULL;
+    if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return NULL;
+
+    /* Create 1D latitude array [ny] */
+    char array_dir[512];
+    snprintf(array_dir, sizeof(array_dir), "%s/lat", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_lat[1024];
+    snprintf(zarray_lat, sizeof(zarray_lat),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", ny, ny);
+    if (write_zarr_file(store_path, "lat/.zarray", zarray_lat) != 0) return NULL;
+    if (write_zarr_file(store_path, "lat/.zattrs",
+                        "{\"units\":\"degrees_north\",\"_ARRAY_DIMENSIONS\":[\"y\"]}") != 0) return NULL;
+
+    double *lat_data = malloc(ny * sizeof(double));
+    if (!lat_data) return NULL;
+    for (int j = 0; j < ny; j++) {
+        lat_data[j] = -90.0 + 180.0 * j / (ny - 1);
+    }
+    if (write_zarr_chunk(store_path, "lat", "0", lat_data, ny * sizeof(double)) != 0) {
+        free(lat_data); return NULL;
+    }
+    free(lat_data);
+
+    /* Create 1D longitude array [nx] */
+    snprintf(array_dir, sizeof(array_dir), "%s/lon", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_lon[1024];
+    snprintf(zarray_lon, sizeof(zarray_lon),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", nx, nx);
+    if (write_zarr_file(store_path, "lon/.zarray", zarray_lon) != 0) return NULL;
+    if (write_zarr_file(store_path, "lon/.zattrs",
+                        "{\"units\":\"degrees_east\",\"_ARRAY_DIMENSIONS\":[\"x\"]}") != 0) return NULL;
+
+    double *lon_data = malloc(nx * sizeof(double));
+    if (!lon_data) return NULL;
+    for (int i = 0; i < nx; i++) {
+        lon_data[i] = -180.0 + 360.0 * i / (nx - 1);
+    }
+    if (write_zarr_chunk(store_path, "lon", "0", lon_data, nx * sizeof(double)) != 0) {
+        free(lon_data); return NULL;
+    }
+    free(lon_data);
+
+    /* Create time array */
+    snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_time[1024];
+    snprintf(zarray_time, sizeof(zarray_time),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", n_times, n_times);
+    if (write_zarr_file(store_path, "time/.zarray", zarray_time) != 0) return NULL;
+    if (write_zarr_file(store_path, "time/.zattrs", "{\"units\":\"days since 2000-01-01\"}") != 0) return NULL;
+
+    double *time_data = malloc(n_times * sizeof(double));
+    if (!time_data) return NULL;
+    for (int t = 0; t < n_times; t++) time_data[t] = t;
+    if (write_zarr_chunk(store_path, "time", "0", time_data, n_times * sizeof(double)) != 0) {
+        free(time_data); return NULL;
+    }
+    free(time_data);
+
+    /* Create data variable sst(time, y, x) */
+    snprintf(array_dir, sizeof(array_dir), "%s/sst", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_data[1024];
+    snprintf(zarray_data, sizeof(zarray_data),
+             "{\"chunks\":[1,%d,%d],\"compressor\":null,\"dtype\":\"<f4\","
+             "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d,%d],\"zarr_format\":2}",
+             ny, nx, n_times, ny, nx);
+    if (write_zarr_file(store_path, "sst/.zarray", zarray_data) != 0) return NULL;
+
+    char zattrs_data[256];
+    snprintf(zattrs_data, sizeof(zattrs_data),
+             "{\"units\":\"K\",\"long_name\":\"Sea Surface Temperature\","
+             "\"_ARRAY_DIMENSIONS\":[\"time\",\"y\",\"x\"]}");
+    if (write_zarr_file(store_path, "sst/.zattrs", zattrs_data) != 0) return NULL;
+
+    /* Write data: sst[t,j,i] = 273 + lat[j]*0.5 + lon[i]*0.1 + t*0.5 */
+    int n_points = ny * nx;
+    float *data = malloc(n_points * sizeof(float));
+    if (!data) return NULL;
+
+    for (int t = 0; t < n_times; t++) {
+        for (int j = 0; j < ny; j++) {
+            double lat = -90.0 + 180.0 * j / (ny - 1);
+            for (int i = 0; i < nx; i++) {
+                double lon = -180.0 + 360.0 * i / (nx - 1);
+                data[j * nx + i] = 273.0f + (float)(lat * 0.5 + lon * 0.1 + t * 0.5);
+            }
+        }
+        char chunk_name[32];
+        snprintf(chunk_name, sizeof(chunk_name), "%d.0.0", t);
+        if (write_zarr_chunk(store_path, "sst", chunk_name, data, n_points * sizeof(float)) != 0) {
+            free(data); return NULL;
+        }
+    }
+    free(data);
+
+    return store_path;
+}
+
+/*
+ * Create a zarr store with 2D curvilinear coordinates.
+ * lat(ny,nx) and lon(ny,nx) are both 2D arrays, data has shape [n_times, ny, nx].
+ */
+static const char *create_curvilinear_zarr_store(int nx, int ny, int n_times) {
+    static char store_path[256];
+    snprintf(store_path, sizeof(store_path), "/tmp/test_ushow_zarr_curv_%d_%d.zarr",
+             getpid(), zarr_test_counter++);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+    int ret = system(cmd);
+    (void)ret;
+
+    if (mkdir(store_path, 0755) != 0) return NULL;
+    if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return NULL;
+    if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return NULL;
+
+    int n_points = ny * nx;
+
+    /* Create 2D latitude array [ny, nx] */
+    char array_dir[512];
+    snprintf(array_dir, sizeof(array_dir), "%s/lat", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_lat[1024];
+    snprintf(zarray_lat, sizeof(zarray_lat),
+             "{\"chunks\":[%d,%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d],\"zarr_format\":2}", ny, nx, ny, nx);
+    if (write_zarr_file(store_path, "lat/.zarray", zarray_lat) != 0) return NULL;
+    if (write_zarr_file(store_path, "lat/.zattrs",
+                        "{\"units\":\"degrees_north\",\"_ARRAY_DIMENSIONS\":[\"y\",\"x\"]}") != 0) return NULL;
+
+    double *lat_data = malloc(n_points * sizeof(double));
+    if (!lat_data) return NULL;
+    /* Curvilinear: lat varies mainly with j but has slight i-dependence */
+    for (int j = 0; j < ny; j++) {
+        double base_lat = -90.0 + 180.0 * j / (ny - 1);
+        for (int i = 0; i < nx; i++) {
+            lat_data[j * nx + i] = base_lat + 2.0 * sin(2.0 * M_PI * i / nx);
+        }
+    }
+    if (write_zarr_chunk(store_path, "lat", "0.0", lat_data, n_points * sizeof(double)) != 0) {
+        free(lat_data); return NULL;
+    }
+    free(lat_data);
+
+    /* Create 2D longitude array [ny, nx] */
+    snprintf(array_dir, sizeof(array_dir), "%s/lon", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_lon[1024];
+    snprintf(zarray_lon, sizeof(zarray_lon),
+             "{\"chunks\":[%d,%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d],\"zarr_format\":2}", ny, nx, ny, nx);
+    if (write_zarr_file(store_path, "lon/.zarray", zarray_lon) != 0) return NULL;
+    if (write_zarr_file(store_path, "lon/.zattrs",
+                        "{\"units\":\"degrees_east\",\"_ARRAY_DIMENSIONS\":[\"y\",\"x\"]}") != 0) return NULL;
+
+    double *lon_data = malloc(n_points * sizeof(double));
+    if (!lon_data) return NULL;
+    /* Curvilinear: lon varies mainly with i but has slight j-dependence */
+    for (int j = 0; j < ny; j++) {
+        for (int i = 0; i < nx; i++) {
+            double base_lon = -180.0 + 360.0 * i / (nx - 1);
+            lon_data[j * nx + i] = base_lon + 3.0 * sin(2.0 * M_PI * j / ny);
+        }
+    }
+    if (write_zarr_chunk(store_path, "lon", "0.0", lon_data, n_points * sizeof(double)) != 0) {
+        free(lon_data); return NULL;
+    }
+    free(lon_data);
+
+    /* Create time array */
+    snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_time[1024];
+    snprintf(zarray_time, sizeof(zarray_time),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", n_times, n_times);
+    if (write_zarr_file(store_path, "time/.zarray", zarray_time) != 0) return NULL;
+    if (write_zarr_file(store_path, "time/.zattrs", "{\"units\":\"days since 2000-01-01\"}") != 0) return NULL;
+
+    double *time_data = malloc(n_times * sizeof(double));
+    if (!time_data) return NULL;
+    for (int t = 0; t < n_times; t++) time_data[t] = t;
+    if (write_zarr_chunk(store_path, "time", "0", time_data, n_times * sizeof(double)) != 0) {
+        free(time_data); return NULL;
+    }
+    free(time_data);
+
+    /* Create data variable sst(time, y, x) */
+    snprintf(array_dir, sizeof(array_dir), "%s/sst", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+
+    char zarray_data[1024];
+    snprintf(zarray_data, sizeof(zarray_data),
+             "{\"chunks\":[1,%d,%d],\"compressor\":null,\"dtype\":\"<f4\","
+             "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d,%d],\"zarr_format\":2}",
+             ny, nx, n_times, ny, nx);
+    if (write_zarr_file(store_path, "sst/.zarray", zarray_data) != 0) return NULL;
+
+    char zattrs_data[256];
+    snprintf(zattrs_data, sizeof(zattrs_data),
+             "{\"units\":\"K\",\"long_name\":\"Sea Surface Temperature\","
+             "\"_ARRAY_DIMENSIONS\":[\"time\",\"y\",\"x\"]}");
+    if (write_zarr_file(store_path, "sst/.zattrs", zattrs_data) != 0) return NULL;
+
+    /* Write data: sst[t,j,i] = 273 + j*0.5 + i*0.1 + t*0.5 */
+    float *data = malloc(n_points * sizeof(float));
+    if (!data) return NULL;
+
+    for (int t = 0; t < n_times; t++) {
+        for (int j = 0; j < ny; j++) {
+            for (int i = 0; i < nx; i++) {
+                data[j * nx + i] = 273.0f + (float)(j * 0.5 + i * 0.1 + t * 0.5);
+            }
+        }
+        char chunk_name[32];
+        snprintf(chunk_name, sizeof(chunk_name), "%d.0.0", t);
+        if (write_zarr_chunk(store_path, "sst", chunk_name, data, n_points * sizeof(float)) != 0) {
+            free(data); return NULL;
+        }
+    }
+    free(data);
+
+    return store_path;
+}
+
+/* Test 1D structured grid mesh creation (meshgrid expansion) */
+TEST(structured_mesh_creation) {
+    const int nx = 36, ny = 18, nt = 2;
+    const char *store_path = create_structured_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    /* Meshgrid should produce nx*ny points */
+    ASSERT_EQ_SIZET(mesh->n_points, (size_t)(nx * ny));
+    ASSERT_EQ(mesh->coord_type, COORD_TYPE_1D_STRUCTURED);
+    ASSERT_EQ_SIZET(mesh->orig_nx, (size_t)nx);
+    ASSERT_EQ_SIZET(mesh->orig_ny, (size_t)ny);
+
+    /* Check first row: lat should be -90 for all, lon should vary */
+    ASSERT_NEAR(mesh->lat[0], -90.0, 1.0);
+    ASSERT_NEAR(mesh->lon[0], -180.0, 1.0);
+    ASSERT_NEAR(mesh->lat[nx - 1], -90.0, 1.0);
+    ASSERT_NEAR(mesh->lon[nx - 1], 180.0, 1.0);
+
+    /* Check last row: lat should be 90 for all */
+    ASSERT_NEAR(mesh->lat[(ny - 1) * nx], 90.0, 1.0);
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test 2D curvilinear grid mesh creation */
+TEST(curvilinear_mesh_creation) {
+    const int nx = 36, ny = 18, nt = 2;
+    const char *store_path = create_curvilinear_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    ASSERT_EQ_SIZET(mesh->n_points, (size_t)(nx * ny));
+    ASSERT_EQ(mesh->coord_type, COORD_TYPE_2D_CURVILINEAR);
+    ASSERT_EQ_SIZET(mesh->orig_nx, (size_t)nx);
+    ASSERT_EQ_SIZET(mesh->orig_ny, (size_t)ny);
+
+    /* Coordinates should be in valid range */
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        ASSERT_GE(mesh->lat[i], -95.0);  /* Curvilinear can have small perturbation */
+        ASSERT_LE(mesh->lat[i], 95.0);
+        ASSERT_GE(mesh->lon[i], -180.0);
+        ASSERT_LE(mesh->lon[i], 180.0);
+    }
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test scanning variables for structured grid */
+TEST(structured_scan_variables) {
+    const int nx = 36, ny = 18, nt = 3;
+    const char *store_path = create_structured_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Should find sst variable */
+    int found_sst = 0;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "sst") == 0) {
+            found_sst = 1;
+            ASSERT_STR_EQ(v->units, "K");
+        }
+        v = v->next;
+    }
+    ASSERT_TRUE(found_sst);
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test scanning variables for curvilinear grid */
+TEST(curvilinear_scan_variables) {
+    const int nx = 36, ny = 18, nt = 3;
+    const char *store_path = create_curvilinear_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Should find sst variable */
+    int found_sst = 0;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "sst") == 0) {
+            found_sst = 1;
+            ASSERT_STR_EQ(v->units, "K");
+        }
+        v = v->next;
+    }
+    ASSERT_TRUE(found_sst);
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test reading data from structured grid */
+TEST(structured_read_slice) {
+    const int nx = 36, ny = 18, nt = 3;
+    const char *store_path = create_structured_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find sst variable */
+    USVar *sst = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "sst") == 0) { sst = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(sst);
+
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    /* Read time step 0 */
+    int status = zarr_read_slice(sst, 0, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Verify data: sst[0,j,i] = 273 + lat[j]*0.5 + lon[i]*0.1 */
+    /* Corner (0,0): lat=-90, lon=-180 -> 273 + (-45) + (-18) = 210 */
+    ASSERT_NEAR(data[0], 210.0f, 1.0f);
+
+    /* Corner (ny-1, nx-1): lat=90, lon=180 -> 273 + 45 + 18 = 336 */
+    ASSERT_NEAR(data[(ny - 1) * nx + (nx - 1)], 336.0f, 1.0f);
+
+    /* Read time step 2 and verify time offset */
+    status = zarr_read_slice(sst, 2, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Corner (0,0): 273 + (-45) + (-18) + 2*0.5 = 211 */
+    ASSERT_NEAR(data[0], 211.0f, 1.0f);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test reading data from curvilinear grid */
+TEST(curvilinear_read_slice) {
+    const int nx = 36, ny = 18, nt = 2;
+    const char *store_path = create_curvilinear_zarr_store(nx, ny, nt);
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    /* Find sst variable */
+    USVar *sst = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "sst") == 0) { sst = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(sst);
+
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    int status = zarr_read_slice(sst, 0, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Verify data: sst[0,j,i] = 273 + j*0.5 + i*0.1 */
+    /* Point (0,0): 273 + 0 + 0 = 273 */
+    ASSERT_NEAR(data[0], 273.0f, 0.1f);
+
+    /* Point (ny-1, nx-1): 273 + (ny-1)*0.5 + (nx-1)*0.1 */
+    float expected = 273.0f + (ny - 1) * 0.5f + (nx - 1) * 0.1f;
+    ASSERT_NEAR(data[(ny - 1) * nx + (nx - 1)], expected, 0.1f);
+
+    /* Read time 1: should differ by 0.5 */
+    float *data1 = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data1);
+    status = zarr_read_slice(sst, 1, 0, data1);
+    ASSERT_EQ(status, 0);
+    ASSERT_NEAR(data1[0] - data[0], 0.5f, 0.01f);
+
+    free(data);
+    free(data1);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Test structured grid with multi-chunk spatial dimensions */
+TEST(structured_multichunk_read) {
+    const int nx = 36, ny = 18, nt = 2;
+    int n_points = nx * ny;
+
+    /* Create store with smaller spatial chunks */
+    static char store_path[256];
+    snprintf(store_path, sizeof(store_path), "/tmp/test_ushow_zarr_struct_mc_%d_%d.zarr",
+             getpid(), zarr_test_counter++);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+    int ret = system(cmd);
+    (void)ret;
+
+    if (mkdir(store_path, 0755) != 0) return 0;
+    if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return 0;
+    if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return 0;
+
+    /* 1D lat [ny] */
+    char array_dir[512];
+    snprintf(array_dir, sizeof(array_dir), "%s/lat", store_path);
+    mkdir(array_dir, 0755);
+    char zarray[1024];
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", ny, ny);
+    write_zarr_file(store_path, "lat/.zarray", zarray);
+    write_zarr_file(store_path, "lat/.zattrs",
+                    "{\"units\":\"degrees_north\",\"_ARRAY_DIMENSIONS\":[\"y\"]}");
+
+    double *lat_data = malloc(ny * sizeof(double));
+    for (int j = 0; j < ny; j++) lat_data[j] = -90.0 + 180.0 * j / (ny - 1);
+    write_zarr_chunk(store_path, "lat", "0", lat_data, ny * sizeof(double));
+    free(lat_data);
+
+    /* 1D lon [nx] */
+    snprintf(array_dir, sizeof(array_dir), "%s/lon", store_path);
+    mkdir(array_dir, 0755);
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", nx, nx);
+    write_zarr_file(store_path, "lon/.zarray", zarray);
+    write_zarr_file(store_path, "lon/.zattrs",
+                    "{\"units\":\"degrees_east\",\"_ARRAY_DIMENSIONS\":[\"x\"]}");
+
+    double *lon_data = malloc(nx * sizeof(double));
+    for (int i = 0; i < nx; i++) lon_data[i] = -180.0 + 360.0 * i / (nx - 1);
+    write_zarr_chunk(store_path, "lon", "0", lon_data, nx * sizeof(double));
+    free(lon_data);
+
+    /* time */
+    snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+    mkdir(array_dir, 0755);
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", nt, nt);
+    write_zarr_file(store_path, "time/.zarray", zarray);
+    write_zarr_file(store_path, "time/.zattrs", "{\"units\":\"days since 2000-01-01\"}");
+    double td[2] = {0, 1};
+    write_zarr_chunk(store_path, "time", "0", td, nt * sizeof(double));
+
+    /* sst(time, y, x) with spatial chunks [1, 10, 20] (multiple chunks in both y and x) */
+    int cy = 10, cx = 20;
+    snprintf(array_dir, sizeof(array_dir), "%s/sst", store_path);
+    mkdir(array_dir, 0755);
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[1,%d,%d],\"compressor\":null,\"dtype\":\"<f4\","
+             "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d,%d],\"zarr_format\":2}",
+             cy, cx, nt, ny, nx);
+    write_zarr_file(store_path, "sst/.zarray", zarray);
+    write_zarr_file(store_path, "sst/.zattrs",
+                    "{\"units\":\"K\",\"long_name\":\"SST\","
+                    "\"_ARRAY_DIMENSIONS\":[\"time\",\"y\",\"x\"]}");
+
+    /* Write multi-chunk data (full chunk size, including edge padding) */
+    int n_chunks_y = (ny + cy - 1) / cy;
+    int n_chunks_x = (nx + cx - 1) / cx;
+    size_t chunk_size = (size_t)cy * cx;
+
+    for (int t = 0; t < nt; t++) {
+        for (int jc = 0; jc < n_chunks_y; jc++) {
+            int j_start = jc * cy;
+            int j_count = cy;
+            if (j_start + j_count > ny) j_count = ny - j_start;
+
+            for (int ic = 0; ic < n_chunks_x; ic++) {
+                int i_start = ic * cx;
+                int i_count = cx;
+                if (i_start + i_count > nx) i_count = nx - i_start;
+
+                /* Zarr chunks are always full size (edge chunks are padded) */
+                float *chunk_data = calloc(chunk_size, sizeof(float));
+                for (int j = 0; j < j_count; j++) {
+                    for (int i = 0; i < i_count; i++) {
+                        chunk_data[j * cx + i] = (float)((j_start + j) * 100 + (i_start + i) + t * 10000);
+                    }
+                }
+                char chunk_name[64];
+                snprintf(chunk_name, sizeof(chunk_name), "%d.%d.%d", t, jc, ic);
+                write_zarr_chunk(store_path, "sst", chunk_name, chunk_data, chunk_size * sizeof(float));
+                free(chunk_data);
+            }
+        }
+    }
+
+    /* Now test reading */
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+    ASSERT_EQ_SIZET(mesh->n_points, (size_t)n_points);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *sst = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "sst") == 0) { sst = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(sst);
+
+    float *data = malloc(n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+
+    int status = zarr_read_slice(sst, 0, 0, data);
+    ASSERT_EQ(status, 0);
+
+    /* Verify: data[j*nx + i] should be j*100 + i */
+    ASSERT_NEAR(data[0], 0.0f, 0.01f);
+    ASSERT_NEAR(data[1], 1.0f, 0.01f);
+    ASSERT_NEAR(data[nx], 100.0f, 0.01f);
+    ASSERT_NEAR(data[5 * nx + 7], 507.0f, 0.01f);
+    ASSERT_NEAR(data[(ny - 1) * nx + (nx - 1)], (float)((ny - 1) * 100 + (nx - 1)), 0.01f);
+
+    /* Read time 1 */
+    status = zarr_read_slice(sst, 1, 0, data);
+    ASSERT_EQ(status, 0);
+    ASSERT_NEAR(data[0], 10000.0f, 0.01f);
+    ASSERT_NEAR(data[5 * nx + 7], 10507.0f, 0.01f);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
 RUN_TESTS("File Zarr")
 
 #else /* !HAVE_ZARR */

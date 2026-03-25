@@ -29,6 +29,8 @@
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
 static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", NULL};
 static const char *NODE_NAMES[] = {"values", "nod2", "nod2d", "node", "nodes", "ncells", "npoints", NULL};
+static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
+static const char *LON_NAMES[] = {"lon", "longitude", "x", "nlon", "rlon", "i", NULL};
 
 /* Internal zarr store data */
 typedef struct {
@@ -322,11 +324,10 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
             varname[len] = '\0';
 
             /* Skip coordinate variables */
-            if (strcasecmp(varname, "latitude") == 0 ||
-                strcasecmp(varname, "longitude") == 0 ||
-                strcasecmp(varname, "lat") == 0 ||
-                strcasecmp(varname, "lon") == 0 ||
-                strcasecmp(varname, "time") == 0) {
+            if (matches_name_list(varname, LAT_NAMES) ||
+                matches_name_list(varname, LON_NAMES) ||
+                matches_name_list(varname, TIME_NAMES) ||
+                matches_name_list(varname, DEPTH_NAMES)) {
                 continue;
             }
 
@@ -343,29 +344,17 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
             ZarrArray *za = parse_zarray(array_path, item, zattrs);
             if (!za) continue;
 
-            /* Check if this is a data variable (has spatial dimension matching mesh) */
-            int has_spatial = 0;
-            int node_dim = -1;
-            for (int d = 0; d < za->ndim; d++) {
-                if (za->shape[d] == mesh->n_points) {
-                    has_spatial = 1;
-                    node_dim = d;
-                    break;
-                }
-            }
-            if (!has_spatial) {
-                free_zarray(za);
-                continue;
-            }
-
             /* Identify dimensions from _ARRAY_DIMENSIONS attribute */
             int time_dim = -1;
             int depth_dim = -1;
+            int node_dim = -1;
+            int lat_dim = -1;
+            int lon_dim = -1;
 
             if (zattrs) {
                 cJSON *dims = cJSON_GetObjectItem(zattrs, "_ARRAY_DIMENSIONS");
                 if (dims && cJSON_IsArray(dims)) {
-                    for (int d = 0; d < cJSON_GetArraySize(dims); d++) {
+                    for (int d = 0; d < cJSON_GetArraySize(dims) && d < za->ndim; d++) {
                         cJSON *dim_item = cJSON_GetArrayItem(dims, d);
                         if (!dim_item || !cJSON_IsString(dim_item)) continue;
                         const char *dim_name = dim_item->valuestring;
@@ -376,9 +365,38 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
                             depth_dim = d;
                         } else if (matches_name_list(dim_name, NODE_NAMES)) {
                             node_dim = d;
+                        } else if (matches_name_list(dim_name, LAT_NAMES)) {
+                            lat_dim = d;
+                        } else if (matches_name_list(dim_name, LON_NAMES)) {
+                            lon_dim = d;
                         }
                     }
                 }
+            }
+
+            /* Check if this is a data variable (has spatial dimension matching mesh) */
+            int has_spatial = 0;
+            for (int d = 0; d < za->ndim; d++) {
+                if (za->shape[d] == mesh->n_points) {
+                    has_spatial = 1;
+                    if (node_dim < 0) node_dim = d;
+                    break;
+                }
+            }
+
+            /* For structured/curvilinear grids, check if lat*lon dimensions match n_points */
+            if (!has_spatial &&
+                mesh->orig_nx > 0 && mesh->orig_ny > 0 &&
+                lat_dim >= 0 && lon_dim >= 0 &&
+                za->shape[lat_dim] == mesh->orig_ny &&
+                za->shape[lon_dim] == mesh->orig_nx) {
+                has_spatial = 1;
+                node_dim = (lat_dim > lon_dim) ? lat_dim : lon_dim;
+            }
+
+            if (!has_spatial) {
+                free_zarray(za);
+                continue;
             }
 
             /* Create variable structure */
@@ -463,9 +481,10 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
             if (stat(zarray_path, &st) != 0) continue;
 
             /* Skip coordinate variables */
-            if (strcasecmp(entry->d_name, "latitude") == 0 ||
-                strcasecmp(entry->d_name, "longitude") == 0 ||
-                strcasecmp(entry->d_name, "time") == 0) {
+            if (matches_name_list(entry->d_name, LAT_NAMES) ||
+                matches_name_list(entry->d_name, LON_NAMES) ||
+                matches_name_list(entry->d_name, TIME_NAMES) ||
+                matches_name_list(entry->d_name, DEPTH_NAMES)) {
                 continue;
             }
 
@@ -484,37 +503,50 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
                 continue;
             }
 
-            /* Check spatial dimension */
-            int has_spatial = 0;
-            int node_dim = -1;
-            for (int d = 0; d < za->ndim; d++) {
-                if (za->shape[d] == mesh->n_points) {
-                    has_spatial = 1;
-                    node_dim = d;
-                    break;
-                }
-            }
-            if (!has_spatial) {
-                free_zarray(za);
-                cJSON_Delete(zarray);
-                if (zattrs) cJSON_Delete(zattrs);
-                continue;
-            }
-
             /* Identify dimensions */
-            int time_dim = -1, depth_dim = -1;
+            int time_dim = -1, depth_dim = -1, node_dim = -1;
+            int lat_dim = -1, lon_dim = -1;
             if (zattrs) {
                 cJSON *dims = cJSON_GetObjectItem(zattrs, "_ARRAY_DIMENSIONS");
                 if (dims && cJSON_IsArray(dims)) {
-                    for (int d = 0; d < cJSON_GetArraySize(dims); d++) {
+                    for (int d = 0; d < cJSON_GetArraySize(dims) && d < za->ndim; d++) {
                         cJSON *dim_item = cJSON_GetArrayItem(dims, d);
                         if (!dim_item || !cJSON_IsString(dim_item)) continue;
                         const char *dim_name = dim_item->valuestring;
                         if (matches_name_list(dim_name, TIME_NAMES)) time_dim = d;
                         else if (matches_name_list(dim_name, DEPTH_NAMES)) depth_dim = d;
                         else if (matches_name_list(dim_name, NODE_NAMES)) node_dim = d;
+                        else if (matches_name_list(dim_name, LAT_NAMES)) lat_dim = d;
+                        else if (matches_name_list(dim_name, LON_NAMES)) lon_dim = d;
                     }
                 }
+            }
+
+            /* Check spatial dimension */
+            int has_spatial = 0;
+            for (int d = 0; d < za->ndim; d++) {
+                if (za->shape[d] == mesh->n_points) {
+                    has_spatial = 1;
+                    if (node_dim < 0) node_dim = d;
+                    break;
+                }
+            }
+
+            /* For structured/curvilinear grids, check if lat*lon dimensions match n_points */
+            if (!has_spatial &&
+                mesh->orig_nx > 0 && mesh->orig_ny > 0 &&
+                lat_dim >= 0 && lon_dim >= 0 &&
+                za->shape[lat_dim] == mesh->orig_ny &&
+                za->shape[lon_dim] == mesh->orig_nx) {
+                has_spatial = 1;
+                node_dim = (lat_dim > lon_dim) ? lat_dim : lon_dim;
+            }
+
+            if (!has_spatial) {
+                free_zarray(za);
+                cJSON_Delete(zarray);
+                if (zattrs) cJSON_Delete(zattrs);
+                continue;
             }
 
             /* Create variable */
@@ -538,6 +570,17 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
 
             for (int d = 0; d < za->ndim && d < MAX_DIMS; d++) {
                 var->dim_sizes[d] = za->shape[d];
+
+                /* Copy dimension names from _ARRAY_DIMENSIONS */
+                if (zattrs) {
+                    cJSON *dims = cJSON_GetObjectItem(zattrs, "_ARRAY_DIMENSIONS");
+                    if (dims && d < cJSON_GetArraySize(dims)) {
+                        cJSON *dim_item = cJSON_GetArrayItem(dims, d);
+                        if (dim_item && cJSON_IsString(dim_item)) {
+                            strncpy(var->dim_names[d], dim_item->valuestring, MAX_NAME_LEN - 1);
+                        }
+                    }
+                }
             }
 
             if (zattrs) {
@@ -556,11 +599,14 @@ USVar *zarr_scan_variables(USFile *file, USMesh *mesh) {
             var_tail = var;
             var_count++;
 
-            printf("Found zarr variable: %s [shape=", entry->d_name);
+            printf("Found zarr variable: %s [", entry->d_name);
             for (int d = 0; d < za->ndim; d++) {
-                printf("%s%zu", d > 0 ? "x" : "", za->shape[d]);
+                printf("%s%s=%zu", d > 0 ? ", " : "", var->dim_names[d], za->shape[d]);
             }
-            printf("]\n");
+            printf("]");
+            if (time_dim >= 0) printf(" (time=%d)", time_dim);
+            if (depth_dim >= 0) printf(" (depth=%d)", depth_dim);
+            printf("\n");
         }
         closedir(dir);
     }
@@ -597,125 +643,212 @@ static void *zarr_read_chunk(const char *chunk_path, ZarrArray *za, size_t expec
 }
 
 /*
- * Read a 2D slice from zarr variable (handles multi-chunk spatial dimensions)
+ * Internal helper: read a spatial slice from a zarr array.
+ * Handles both single spatial dimension (unstructured) and two spatial
+ * dimensions (structured lat/lon grids) with multi-chunk support.
  */
-int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data) {
-    if (!var || !var->zarr_data || !data) return -1;
-
-    ZarrArray *za = (ZarrArray *)var->zarr_data;
-    size_t n_points = var->mesh->n_points;
+static int zarr_read_spatial_slice(ZarrArray *za, int time_dim_id, int depth_dim_id,
+                                    size_t time_idx, size_t depth_idx, float *data) {
+    if (!za || !data) return -1;
 
     /* Determine time/depth chunk indices */
-    size_t time_chunk = 0, depth_chunk = 0;
-    size_t local_time = time_idx, local_depth = depth_idx;
+    size_t time_chunk = 0, local_time = time_idx;
+    size_t depth_chunk = 0, local_depth = depth_idx;
 
-    if (var->time_dim_id >= 0) {
-        time_chunk = time_idx / za->chunks[var->time_dim_id];
-        local_time = time_idx % za->chunks[var->time_dim_id];
+    if (time_dim_id >= 0) {
+        time_chunk = time_idx / za->chunks[time_dim_id];
+        local_time = time_idx % za->chunks[time_dim_id];
     }
-    if (var->depth_dim_id >= 0) {
-        depth_chunk = depth_idx / za->chunks[var->depth_dim_id];
-        local_depth = depth_idx % za->chunks[var->depth_dim_id];
+    if (depth_dim_id >= 0) {
+        depth_chunk = depth_idx / za->chunks[depth_dim_id];
+        local_depth = depth_idx % za->chunks[depth_dim_id];
     }
 
-    /* Find spatial dimension (not time, not depth) */
-    int spatial_dim = -1;
+    /* Identify spatial dimensions (everything except time and depth) */
+    int spatial_dims[MAX_DIMS];
+    int n_spatial = 0;
     for (int d = 0; d < za->ndim; d++) {
-        if (d != var->time_dim_id && d != var->depth_dim_id) {
-            spatial_dim = d;
-            break;
+        if (d != time_dim_id && d != depth_dim_id) {
+            spatial_dims[n_spatial++] = d;
         }
     }
 
-    if (spatial_dim < 0) {
+    if (n_spatial < 1) {
         fprintf(stderr, "Could not identify spatial dimension\n");
         return -1;
     }
 
-    /* Calculate number of spatial chunks */
-    size_t spatial_shape = za->shape[spatial_dim];
-    size_t spatial_chunk_size = za->chunks[spatial_dim];
-    size_t n_spatial_chunks = (spatial_shape + spatial_chunk_size - 1) / spatial_chunk_size;
+    /* Calculate chunk strides (for indexing within a chunk) */
+    size_t chunk_strides[MAX_DIMS];
+    chunk_strides[za->ndim - 1] = 1;
+    for (int d = za->ndim - 2; d >= 0; d--) {
+        chunk_strides[d] = chunk_strides[d + 1] * za->chunks[d + 1];
+    }
 
-    /* Calculate expected uncompressed size per chunk */
+    /* Expected uncompressed chunk size */
     size_t chunk_elements = 1;
     for (int d = 0; d < za->ndim; d++) {
         chunk_elements *= za->chunks[d];
     }
     size_t expected_size = chunk_elements * za->dtype_size;
 
-    /* Read all spatial chunks and combine */
-    size_t output_offset = 0;
+    /* Base offset within chunk for fixed dimensions (time, depth) */
+    size_t base_offset = 0;
+    if (time_dim_id >= 0) {
+        base_offset += local_time * chunk_strides[time_dim_id];
+    }
+    if (depth_dim_id >= 0) {
+        base_offset += local_depth * chunk_strides[depth_dim_id];
+    }
 
-    for (size_t spatial_chunk = 0; spatial_chunk < n_spatial_chunks; spatial_chunk++) {
-        /* Build chunk filename */
-        char chunk_path[PATH_MAX];
-        char chunk_key[256] = "";
+    if (n_spatial == 1) {
+        /* --- Single spatial dimension (unstructured or flattened) --- */
+        int sd = spatial_dims[0];
+        size_t spatial_shape = za->shape[sd];
+        size_t spatial_chunk_size = za->chunks[sd];
+        size_t n_chunks = (spatial_shape + spatial_chunk_size - 1) / spatial_chunk_size;
 
-        for (int d = 0; d < za->ndim; d++) {
-            char part[32];
-            size_t chunk_idx;
+        size_t output_offset = 0;
+        for (size_t sc = 0; sc < n_chunks; sc++) {
+            /* Build chunk key */
+            char chunk_key[256] = "";
+            for (int d = 0; d < za->ndim; d++) {
+                char part[32];
+                size_t ci;
+                if (d == time_dim_id) ci = time_chunk;
+                else if (d == depth_dim_id) ci = depth_chunk;
+                else ci = sc;
+                if (d > 0) strcat(chunk_key, ".");
+                snprintf(part, sizeof(part), "%zu", ci);
+                strcat(chunk_key, part);
+            }
 
-            if (d == var->time_dim_id) {
-                chunk_idx = time_chunk;
-            } else if (d == var->depth_dim_id) {
-                chunk_idx = depth_chunk;
+            char chunk_path[PATH_MAX];
+            snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
+
+            void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
+            if (!chunk_data) return -1;
+
+            size_t remaining = spatial_shape - output_offset;
+            size_t points_in_chunk = (remaining < spatial_chunk_size) ? remaining : spatial_chunk_size;
+
+            /* Copy with type conversion using stride-based offset */
+            size_t stride = chunk_strides[sd];
+            if (za->dtype == 'f' && za->dtype_size == 4) {
+                float *src = (float *)chunk_data;
+                for (size_t i = 0; i < points_in_chunk; i++)
+                    data[output_offset + i] = src[base_offset + i * stride];
+            } else if (za->dtype == 'd') {
+                double *src = (double *)chunk_data;
+                for (size_t i = 0; i < points_in_chunk; i++)
+                    data[output_offset + i] = (float)src[base_offset + i * stride];
+            } else if (za->dtype == 'i' && za->dtype_size == 8) {
+                int64_t *src = (int64_t *)chunk_data;
+                for (size_t i = 0; i < points_in_chunk; i++)
+                    data[output_offset + i] = (float)src[base_offset + i * stride];
             } else {
-                chunk_idx = spatial_chunk;
+                fprintf(stderr, "Unsupported dtype: %c (size %d)\n", za->dtype, za->dtype_size);
+                free(chunk_data);
+                return -1;
             }
 
-            if (d > 0) strcat(chunk_key, ".");
-            snprintf(part, sizeof(part), "%zu", chunk_idx);
-            strcat(chunk_key, part);
-        }
-
-        snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
-
-        /* Read chunk */
-        void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
-        if (!chunk_data) return -1;
-
-        /* Calculate how many points to copy from this chunk */
-        size_t remaining = n_points - output_offset;
-        size_t points_in_chunk = (remaining < spatial_chunk_size) ? remaining : spatial_chunk_size;
-
-        /* Calculate offset within chunk for our time index */
-        size_t slice_offset = 0;
-        if (var->time_dim_id >= 0 && var->time_dim_id < spatial_dim) {
-            /* Time dimension comes before spatial: offset = local_time * spatial_chunk_size */
-            slice_offset = local_time * spatial_chunk_size;
-        }
-        (void)local_depth;  /* Not used in current 2D slice logic */
-
-        /* Copy and convert to float */
-        if (za->dtype == 'f' && za->dtype_size == 4) {
-            /* Already float32 */
-            memcpy(data + output_offset,
-                   (char *)chunk_data + slice_offset * sizeof(float),
-                   points_in_chunk * sizeof(float));
-        } else if (za->dtype == 'd') {
-            /* Double to float */
-            double *src = (double *)((char *)chunk_data + slice_offset * sizeof(double));
-            for (size_t i = 0; i < points_in_chunk; i++) {
-                data[output_offset + i] = (float)src[i];
-            }
-        } else if (za->dtype == 'i' && za->dtype_size == 8) {
-            /* Int64 to float */
-            int64_t *src = (int64_t *)((char *)chunk_data + slice_offset * sizeof(int64_t));
-            for (size_t i = 0; i < points_in_chunk; i++) {
-                data[output_offset + i] = (float)src[i];
-            }
-        } else {
-            fprintf(stderr, "Unsupported dtype: %c (size %d)\n", za->dtype, za->dtype_size);
             free(chunk_data);
-            return -1;
+            output_offset += points_in_chunk;
         }
+    } else if (n_spatial == 2) {
+        /* --- Two spatial dimensions (structured grid: e.g. lat, lon) --- */
+        int d0 = spatial_dims[0];  /* First spatial dim (e.g. lat) */
+        int d1 = spatial_dims[1];  /* Second spatial dim (e.g. lon) */
+        size_t shape0 = za->shape[d0];
+        size_t shape1 = za->shape[d1];
+        size_t chunk0 = za->chunks[d0];
+        size_t chunk1 = za->chunks[d1];
+        size_t n_chunks0 = (shape0 + chunk0 - 1) / chunk0;
+        size_t n_chunks1 = (shape1 + chunk1 - 1) / chunk1;
 
-        free(chunk_data);
-        output_offset += points_in_chunk;
+        for (size_t c0 = 0; c0 < n_chunks0; c0++) {
+            for (size_t c1 = 0; c1 < n_chunks1; c1++) {
+                /* Build chunk key */
+                char chunk_key[256] = "";
+                for (int d = 0; d < za->ndim; d++) {
+                    char part[32];
+                    size_t ci;
+                    if (d == time_dim_id) ci = time_chunk;
+                    else if (d == depth_dim_id) ci = depth_chunk;
+                    else if (d == d0) ci = c0;
+                    else ci = c1;  /* d == d1 */
+                    if (d > 0) strcat(chunk_key, ".");
+                    snprintf(part, sizeof(part), "%zu", ci);
+                    strcat(chunk_key, part);
+                }
+
+                char chunk_path[PATH_MAX];
+                snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
+
+                void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
+                if (!chunk_data) return -1;
+
+                size_t start0 = c0 * chunk0;
+                size_t start1 = c1 * chunk1;
+                size_t actual0 = ((shape0 - start0) < chunk0) ? (shape0 - start0) : chunk0;
+                size_t actual1 = ((shape1 - start1) < chunk1) ? (shape1 - start1) : chunk1;
+
+                size_t stride0 = chunk_strides[d0];
+                size_t stride1 = chunk_strides[d1];
+
+                if (za->dtype == 'f' && za->dtype_size == 4) {
+                    float *src = (float *)chunk_data;
+                    for (size_t j = 0; j < actual0; j++) {
+                        for (size_t i = 0; i < actual1; i++) {
+                            size_t co = base_offset + j * stride0 + i * stride1;
+                            size_t oi = (start0 + j) * shape1 + (start1 + i);
+                            data[oi] = src[co];
+                        }
+                    }
+                } else if (za->dtype == 'd') {
+                    double *src = (double *)chunk_data;
+                    for (size_t j = 0; j < actual0; j++) {
+                        for (size_t i = 0; i < actual1; i++) {
+                            size_t co = base_offset + j * stride0 + i * stride1;
+                            size_t oi = (start0 + j) * shape1 + (start1 + i);
+                            data[oi] = (float)src[co];
+                        }
+                    }
+                } else if (za->dtype == 'i' && za->dtype_size == 8) {
+                    int64_t *src = (int64_t *)chunk_data;
+                    for (size_t j = 0; j < actual0; j++) {
+                        for (size_t i = 0; i < actual1; i++) {
+                            size_t co = base_offset + j * stride0 + i * stride1;
+                            size_t oi = (start0 + j) * shape1 + (start1 + i);
+                            data[oi] = (float)src[co];
+                        }
+                    }
+                } else {
+                    fprintf(stderr, "Unsupported dtype: %c (size %d)\n", za->dtype, za->dtype_size);
+                    free(chunk_data);
+                    return -1;
+                }
+
+                free(chunk_data);
+            }
+        }
+    } else {
+        fprintf(stderr, "Unsupported number of spatial dimensions: %d\n", n_spatial);
+        return -1;
     }
 
     return 0;
+}
+
+/*
+ * Read a 2D slice from zarr variable (handles multi-chunk spatial dimensions)
+ */
+int zarr_read_slice(USVar *var, size_t time_idx, size_t depth_idx, float *data) {
+    if (!var || !var->zarr_data || !data) return -1;
+
+    return zarr_read_spatial_slice((ZarrArray *)var->zarr_data,
+                                   var->time_dim_id, var->depth_dim_id,
+                                   time_idx, depth_idx, data);
 }
 
 /*
@@ -1271,80 +1404,12 @@ int zarr_read_slice_fileset(USFileSet *fs, USVar *var,
         return -1;
     }
 
-    /* Now read the slice using the ZarrArray */
-    size_t n_points = var->mesh->n_points;
+    /* Read the slice using the shared helper */
+    int result = zarr_read_spatial_slice(za, var->time_dim_id, var->depth_dim_id,
+                                          local_time, depth_idx, data);
 
-    /* Determine chunk indices */
-    size_t time_chunk = 0;
-    size_t local_time_in_chunk = local_time;
-
-    if (var->time_dim_id >= 0) {
-        time_chunk = local_time / za->chunks[var->time_dim_id];
-        local_time_in_chunk = local_time % za->chunks[var->time_dim_id];
-    }
-
-    /* Build chunk filename */
-    char chunk_path[PATH_MAX];
-    char chunk_key[256] = "";
-
-    for (int d = 0; d < za->ndim; d++) {
-        char part[32];
-        size_t chunk_idx;
-
-        if (d == var->time_dim_id) {
-            chunk_idx = time_chunk;
-        } else if (d == var->depth_dim_id) {
-            chunk_idx = depth_idx / za->chunks[d];
-        } else {
-            chunk_idx = 0;
-        }
-
-        if (d > 0) strcat(chunk_key, ".");
-        snprintf(part, sizeof(part), "%zu", chunk_idx);
-        strcat(chunk_key, part);
-    }
-
-    snprintf(chunk_path, sizeof(chunk_path), "%s/%s", za->array_path, chunk_key);
-
-    /* Calculate expected uncompressed size */
-    size_t chunk_elements = 1;
-    for (int d = 0; d < za->ndim; d++) {
-        chunk_elements *= za->chunks[d];
-    }
-    size_t expected_size = chunk_elements * za->dtype_size;
-
-    /* Read chunk */
-    void *chunk_data = zarr_read_chunk(chunk_path, za, expected_size);
-    if (!chunk_data) {
-        if (need_free_za) free_zarray(za);
-        return -1;
-    }
-
-    /* Extract the slice we need */
-    size_t slice_offset = 0;
-    if (var->time_dim_id >= 0 && var->time_dim_id == 0) {
-        slice_offset = local_time_in_chunk * za->chunks[1];
-    }
-
-    /* Copy and convert to float */
-    if (za->dtype == 'f' && za->dtype_size == 4) {
-        memcpy(data, (char *)chunk_data + slice_offset * sizeof(float), n_points * sizeof(float));
-    } else if (za->dtype == 'd') {
-        double *src = (double *)((char *)chunk_data + slice_offset * sizeof(double));
-        for (size_t i = 0; i < n_points; i++) {
-            data[i] = (float)src[i];
-        }
-    } else if (za->dtype == 'i' && za->dtype_size == 8) {
-        int64_t *src = (int64_t *)((char *)chunk_data + slice_offset * sizeof(int64_t));
-        for (size_t i = 0; i < n_points; i++) {
-            data[i] = (float)src[i];
-        }
-    }
-
-    free(chunk_data);
     if (need_free_za) free_zarray(za);
-
-    return 0;
+    return result;
 }
 
 USDimInfo *zarr_get_dim_info_fileset(USFileSet *fs, USVar *var, int *n_dims_out) {
