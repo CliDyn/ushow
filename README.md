@@ -261,6 +261,7 @@ Options:
   --yac-method <method>  Use YAC interpolation with specific method;
                          click the method button in the GUI to cycle methods at runtime
   --yac-3d               Fractional fill-value masking for 3D variables
+  -v, --version          Show version
   -h, --help             Show help message
 ```
 
@@ -283,6 +284,7 @@ Options (uterm):
   --yac              Use YAC interpolation (default: avg_arith)
   --yac-method <m>   Use YAC interpolation method (requires WITH_YAC=1)
   --yac-3d           Fractional fill-value masking for 3D variables
+  -v, --version          Show version
   -h, --help             Show help
 ```
 

@@ -9,6 +9,9 @@
 
 #include <stddef.h>
 
+/* Version */
+#define USHOW_VERSION       "0.1.3"
+
 /* Constants */
 #define EARTH_RADIUS_M      6371000.0
 #define DEG2RAD             (M_PI / 180.0)

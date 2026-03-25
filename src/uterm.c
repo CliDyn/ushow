@@ -260,6 +260,7 @@ static void print_usage(const char *prog) {
 #endif
     fprintf(stderr, "  -t, --threads <n>      Max threads\n");
     fprintf(stderr, "                         (default: OMP_NUM_THREADS or 4)\n");
+    fprintf(stderr, "  -v, --version          Show version\n");
     fprintf(stderr, "  -h, --help             Show this help\n\n");
 
     fprintf(stderr, "Keys:\n");
@@ -888,12 +889,13 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
         {"yac-3d", no_argument, 0, OPT_YAC_3D},
 #endif
         {"threads", required_argument, 0, 't'},
+        {"version", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "m:r:i:d:t:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "m:r:i:d:t:vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'm':
                 strncpy(options.mesh_file, optarg, MAX_NAME_LEN - 1);
@@ -909,6 +911,9 @@ static int parse_options(int argc, char **argv, int *first_data_arg) {
                 options.frame_delay_ms = atoi(optarg);
                 if (options.frame_delay_ms < 10) options.frame_delay_ms = 10;
                 break;
+            case 'v':
+                printf("uterm %s\n", USHOW_VERSION);
+                return 1;
             case 'h':
                 print_usage(argv[0]);
                 return 1;
