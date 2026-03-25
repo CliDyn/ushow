@@ -489,6 +489,8 @@ With `--yac-3d`, ushow generates a dynamic fractional mask from the source field
   - Data types: Float32, Float64, Int64
   - Supports consolidated metadata (.zmetadata) for faster loading
   - Supports unstructured data (ICON, FESOM, etc.)
+  - Supports structured grids with 1D coordinate arrays (automatic meshgrid expansion)
+  - Supports curvilinear grids with 2D coordinate arrays
   - Reads coordinates from embedded latitude/longitude arrays
   - Dimension metadata via `_ARRAY_DIMENSIONS` attribute (xarray convention)
   - Multi-file time concatenation supported via glob patterns

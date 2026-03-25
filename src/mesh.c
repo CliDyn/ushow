@@ -411,9 +411,12 @@ static cJSON *mesh_read_json(const char *path) {
     return json;
 }
 
-/* Read and decompress a zarr coordinate array (handles multi-chunk arrays) */
+/* Read and decompress a zarr coordinate array (handles N-dimensional, multi-chunk arrays).
+ * Returns flattened array of all values. Sets *ndim_out if non-NULL.
+ * For 2D coords, *dim0_out and *dim1_out give the shape. */
 static double *read_zarr_coord(const char *base_path, const char *coord_name,
-                                size_t *n_points_out) {
+                                size_t *n_points_out, int *ndim_out,
+                                size_t *dim0_out, size_t *dim1_out) {
     char coord_path[PATH_MAX];
     char zarray_path[PATH_MAX];
 
@@ -423,7 +426,6 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
     /* Read .zarray metadata */
     cJSON *zarray = mesh_read_json(zarray_path);
     if (!zarray) {
-        fprintf(stderr, "Failed to read %s\n", zarray_path);
         return NULL;
     }
 
@@ -433,18 +435,35 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
         cJSON_Delete(zarray);
         return NULL;
     }
-    size_t n_points = (size_t)cJSON_GetArrayItem(shape, 0)->valuedouble;
-    *n_points_out = n_points;
 
-    /* Get chunk size */
-    cJSON *chunks = cJSON_GetObjectItem(zarray, "chunks");
-    size_t chunk_size = n_points;  /* Default: single chunk */
-    if (chunks && cJSON_IsArray(chunks) && cJSON_GetArraySize(chunks) >= 1) {
-        chunk_size = (size_t)cJSON_GetArrayItem(chunks, 0)->valuedouble;
+    int ndim = cJSON_GetArraySize(shape);
+    if (ndim > 2) {
+        /* Only support 1D and 2D coordinate arrays */
+        cJSON_Delete(zarray);
+        return NULL;
     }
 
-    /* Calculate number of chunks */
-    size_t n_chunks = (n_points + chunk_size - 1) / chunk_size;
+    size_t shape_dims[2] = {0, 0};
+    size_t chunk_dims[2] = {0, 0};
+    size_t n_points = 1;
+    for (int i = 0; i < ndim; i++) {
+        shape_dims[i] = (size_t)cJSON_GetArrayItem(shape, i)->valuedouble;
+        chunk_dims[i] = shape_dims[i];  /* Default: one chunk */
+        n_points *= shape_dims[i];
+    }
+
+    *n_points_out = n_points;
+    if (ndim_out) *ndim_out = ndim;
+    if (dim0_out) *dim0_out = shape_dims[0];
+    if (dim1_out) *dim1_out = (ndim > 1) ? shape_dims[1] : 0;
+
+    /* Get chunk sizes */
+    cJSON *chunks = cJSON_GetObjectItem(zarray, "chunks");
+    if (chunks && cJSON_IsArray(chunks)) {
+        for (int i = 0; i < ndim && i < cJSON_GetArraySize(chunks); i++) {
+            chunk_dims[i] = (size_t)cJSON_GetArrayItem(chunks, i)->valuedouble;
+        }
+    }
 
     /* Get dtype */
     cJSON *dtype_obj = cJSON_GetObjectItem(zarray, "dtype");
@@ -474,11 +493,47 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
         return NULL;
     }
 
+    /* Calculate number of chunks per dimension */
+    size_t n_chunks_per_dim[2];
+    size_t total_chunks = 1;
+    for (int i = 0; i < ndim; i++) {
+        n_chunks_per_dim[i] = (shape_dims[i] + chunk_dims[i] - 1) / chunk_dims[i];
+        total_chunks *= n_chunks_per_dim[i];
+    }
+
     /* Read and decompress each chunk */
-    size_t offset = 0;
-    for (size_t chunk_idx = 0; chunk_idx < n_chunks; chunk_idx++) {
+    for (size_t chunk_flat = 0; chunk_flat < total_chunks; chunk_flat++) {
+        /* Decompose flat chunk index into per-dimension indices */
+        size_t ci[2] = {0, 0};
+        if (ndim == 1) {
+            ci[0] = chunk_flat;
+        } else {
+            ci[0] = chunk_flat / n_chunks_per_dim[1];
+            ci[1] = chunk_flat % n_chunks_per_dim[1];
+        }
+
+        /* Build chunk path (e.g., "coord/0" for 1D, "coord/0.0" for 2D) */
         char chunk_path[PATH_MAX];
-        snprintf(chunk_path, sizeof(chunk_path), "%s/%zu", coord_path, chunk_idx);
+        if (ndim == 1) {
+            snprintf(chunk_path, sizeof(chunk_path), "%s/%zu", coord_path, ci[0]);
+        } else {
+            snprintf(chunk_path, sizeof(chunk_path), "%s/%zu.%zu", coord_path, ci[0], ci[1]);
+        }
+
+        /* Calculate this chunk's actual element count */
+        size_t chunk_elements = 1;
+        size_t chunk_actual[2];
+        for (int i = 0; i < ndim; i++) {
+            size_t start = ci[i] * chunk_dims[i];
+            size_t remaining = shape_dims[i] - start;
+            chunk_actual[i] = (remaining < chunk_dims[i]) ? remaining : chunk_dims[i];
+            chunk_elements *= chunk_actual[i];
+        }
+
+        /* Expected decompressed size (full chunk, may be larger than actual for edge chunks) */
+        size_t full_chunk_elements = 1;
+        for (int i = 0; i < ndim; i++) full_chunk_elements *= chunk_dims[i];
+        size_t expected_decomp_size = full_chunk_elements * dtype_size;
 
         size_t comp_size;
         void *compressed = mesh_read_file(chunk_path, &comp_size);
@@ -489,21 +544,19 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
             return NULL;
         }
 
-        /* Calculate this chunk's actual size (last chunk may be smaller) */
-        size_t remaining = n_points - offset;
-        size_t this_chunk_points = (remaining < chunk_size) ? remaining : chunk_size;
-        size_t this_chunk_bytes = this_chunk_points * dtype_size;
-
-        /* Decompress into the correct offset */
-        void *chunk_dest = (char *)raw_data + offset * dtype_size;
-
+        /* Decompress to temp buffer */
+        void *chunk_data = NULL;
         if (!compressor_id) {
-            /* No compression */
-            memcpy(chunk_dest, compressed, this_chunk_bytes);
-            free(compressed);
+            chunk_data = compressed;
         } else if (strcmp(compressor_id, "lz4") == 0) {
             if (comp_size < 4) {
-                fprintf(stderr, "LZ4 chunk too small: %s\n", chunk_path);
+                free(compressed);
+                free(raw_data);
+                cJSON_Delete(zarray);
+                return NULL;
+            }
+            chunk_data = malloc(expected_decomp_size);
+            if (!chunk_data) {
                 free(compressed);
                 free(raw_data);
                 cJSON_Delete(zarray);
@@ -511,54 +564,35 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
             }
             uint32_t uncomp_size = *(uint32_t *)compressed;
             int result = LZ4_decompress_safe((const char *)compressed + 4,
-                                             chunk_dest,
+                                             chunk_data,
                                              (int)(comp_size - 4),
                                              (int)uncomp_size);
             free(compressed);
             if (result < 0) {
-                fprintf(stderr, "LZ4 decompression failed for %s chunk %zu\n",
-                        coord_name, chunk_idx);
+                fprintf(stderr, "LZ4 decompression failed for %s\n", chunk_path);
+                free(chunk_data);
                 free(raw_data);
                 cJSON_Delete(zarray);
                 return NULL;
             }
         } else if (strcmp(compressor_id, "blosc") == 0) {
-            /* Get actual uncompressed size from blosc header */
             size_t nbytes, cbytes, blocksize;
             blosc_cbuffer_sizes(compressed, &nbytes, &cbytes, &blocksize);
-
-            /* Decompress to temp buffer if chunk is larger than needed (last chunk case) */
-            if (nbytes > this_chunk_bytes) {
-                void *temp = malloc(nbytes);
-                if (!temp) {
-                    free(compressed);
-                    free(raw_data);
-                    cJSON_Delete(zarray);
-                    return NULL;
-                }
-                int result = blosc_decompress(compressed, temp, nbytes);
+            chunk_data = malloc(nbytes);
+            if (!chunk_data) {
                 free(compressed);
-                if (result < 0) {
-                    fprintf(stderr, "Blosc decompression failed for %s chunk %zu\n",
-                            coord_name, chunk_idx);
-                    free(temp);
-                    free(raw_data);
-                    cJSON_Delete(zarray);
-                    return NULL;
-                }
-                /* Copy only the needed portion */
-                memcpy(chunk_dest, temp, this_chunk_bytes);
-                free(temp);
-            } else {
-                int result = blosc_decompress(compressed, chunk_dest, nbytes);
-                free(compressed);
-                if (result < 0) {
-                    fprintf(stderr, "Blosc decompression failed for %s chunk %zu\n",
-                            coord_name, chunk_idx);
-                    free(raw_data);
-                    cJSON_Delete(zarray);
-                    return NULL;
-                }
+                free(raw_data);
+                cJSON_Delete(zarray);
+                return NULL;
+            }
+            int result = blosc_decompress(compressed, chunk_data, nbytes);
+            free(compressed);
+            if (result < 0) {
+                fprintf(stderr, "Blosc decompression failed for %s\n", chunk_path);
+                free(chunk_data);
+                free(raw_data);
+                cJSON_Delete(zarray);
+                return NULL;
             }
         } else {
             fprintf(stderr, "Unknown compressor: %s\n", compressor_id);
@@ -568,7 +602,26 @@ static double *read_zarr_coord(const char *base_path, const char *coord_name,
             return NULL;
         }
 
-        offset += this_chunk_points;
+        /* Copy chunk data into the output buffer at the right position */
+        if (ndim == 1) {
+            size_t dst_offset = ci[0] * chunk_dims[0];
+            memcpy((char *)raw_data + dst_offset * dtype_size,
+                   chunk_data, chunk_actual[0] * dtype_size);
+        } else {
+            /* 2D: copy row by row to handle chunking properly */
+            size_t row_start = ci[0] * chunk_dims[0];
+            size_t col_start = ci[1] * chunk_dims[1];
+            for (size_t r = 0; r < chunk_actual[0]; r++) {
+                size_t dst_offset = (row_start + r) * shape_dims[1] + col_start;
+                size_t src_offset = r * chunk_dims[1];
+                memcpy((char *)raw_data + dst_offset * dtype_size,
+                       (char *)chunk_data + src_offset * dtype_size,
+                       chunk_actual[1] * dtype_size);
+            }
+        }
+
+        if (chunk_data != compressed) free(chunk_data);
+        else free(compressed);
     }
 
     cJSON_Delete(zarray);
@@ -608,18 +661,34 @@ USMesh *mesh_create_from_zarr(USFile *file) {
 
     printf("Loading coordinates from zarr store: %s\n", base_path);
 
-    /* Try to read latitude and longitude */
+    /* Try to read latitude and longitude coordinate arrays */
     size_t lat_points = 0, lon_points = 0;
+    int lat_ndim = 0, lon_ndim = 0;
+    size_t lat_dim0 = 0, lat_dim1 = 0;
+    size_t lon_dim0 = 0, lon_dim1 = 0;
 
-    /* Try different coordinate names */
-    double *lat = read_zarr_coord(base_path, "latitude", &lat_points);
-    if (!lat) {
-        lat = read_zarr_coord(base_path, "lat", &lat_points);
+    /* Try common coordinate names (ordered by likelihood) */
+    static const char *zarr_lat_names[] = {
+        "latitude", "lat", "y", "nav_lat", "glat", "clat",
+        "yt_ocean", "yu_ocean", "yh", "yq",
+        "latCell", "latVertex", NULL
+    };
+    static const char *zarr_lon_names[] = {
+        "longitude", "lon", "x", "nav_lon", "glon", "clon",
+        "xt_ocean", "xu_ocean", "xh", "xq",
+        "lonCell", "lonVertex", NULL
+    };
+
+    double *lat = NULL;
+    for (int i = 0; zarr_lat_names[i] != NULL && !lat; i++) {
+        lat = read_zarr_coord(base_path, zarr_lat_names[i], &lat_points,
+                              &lat_ndim, &lat_dim0, &lat_dim1);
     }
 
-    double *lon = read_zarr_coord(base_path, "longitude", &lon_points);
-    if (!lon) {
-        lon = read_zarr_coord(base_path, "lon", &lon_points);
+    double *lon = NULL;
+    for (int i = 0; zarr_lon_names[i] != NULL && !lon; i++) {
+        lon = read_zarr_coord(base_path, zarr_lon_names[i], &lon_points,
+                              &lon_ndim, &lon_dim0, &lon_dim1);
     }
 
     if (!lat || !lon) {
@@ -629,15 +698,77 @@ USMesh *mesh_create_from_zarr(USFile *file) {
         return NULL;
     }
 
-    if (lat_points != lon_points) {
-        fprintf(stderr, "Coordinate array size mismatch: lat=%zu, lon=%zu\n",
-                lat_points, lon_points);
+    printf("Coordinate info: lat %dD [%zu", lat_ndim, lat_dim0);
+    if (lat_ndim == 2) printf("x%zu", lat_dim1);
+    printf("], lon %dD [%zu", lon_ndim, lon_dim0);
+    if (lon_ndim == 2) printf("x%zu", lon_dim1);
+    printf("]\n");
+
+    size_t n_points;
+    CoordType coord_type;
+    size_t orig_nx = 0, orig_ny = 0;
+
+    if (lat_ndim == 2 && lon_ndim == 2) {
+        /* Both 2D -> curvilinear grid (already flattened by read_zarr_coord) */
+        if (lat_dim0 != lon_dim0 || lat_dim1 != lon_dim1) {
+            fprintf(stderr, "2D coordinate arrays have different shapes\n");
+            free(lat);
+            free(lon);
+            return NULL;
+        }
+        coord_type = COORD_TYPE_2D_CURVILINEAR;
+        orig_ny = lat_dim0;
+        orig_nx = lat_dim1;
+        n_points = lat_points;  /* Already = dim0 * dim1 */
+        printf("Detected: 2D curvilinear grid (%zu x %zu = %zu points)\n",
+               orig_ny, orig_nx, n_points);
+    } else if (lat_ndim == 1 && lon_ndim == 1 && lat_points == lon_points) {
+        /* Same size 1D arrays -> unstructured */
+        coord_type = COORD_TYPE_1D_UNSTRUCTURED;
+        n_points = lat_points;
+        printf("Detected: 1D unstructured coordinates (%zu points)\n", n_points);
+    } else if (lat_ndim == 1 && lon_ndim == 1) {
+        /* Different size 1D arrays -> structured grid, create meshgrid */
+        coord_type = COORD_TYPE_1D_STRUCTURED;
+        orig_nx = lon_points;
+        orig_ny = lat_points;
+        n_points = orig_nx * orig_ny;
+        printf("Detected: 1D structured grid (%zu x %zu = %zu points)\n",
+               orig_nx, orig_ny, n_points);
+
+        /* Read 1D coordinate arrays and expand to meshgrid */
+        double *lon_2d = malloc(n_points * sizeof(double));
+        double *lat_2d = malloc(n_points * sizeof(double));
+        if (!lon_2d || !lat_2d) {
+            free(lon_2d);
+            free(lat_2d);
+            free(lon);
+            free(lat);
+            return NULL;
+        }
+
+        /* Create meshgrid (flatten in row-major order: lat varies slowest) */
+        size_t idx = 0;
+        for (size_t j = 0; j < orig_ny; j++) {
+            for (size_t i = 0; i < orig_nx; i++) {
+                lon_2d[idx] = lon[i];
+                lat_2d[idx] = lat[j];
+                idx++;
+            }
+        }
+
+        free(lon);
+        free(lat);
+        lon = lon_2d;
+        lat = lat_2d;
+    } else {
+        fprintf(stderr, "Unsupported coordinate combination: lat %dD, lon %dD\n",
+                lat_ndim, lon_ndim);
         free(lat);
         free(lon);
         return NULL;
     }
 
-    size_t n_points = lat_points;
     printf("Loaded %zu coordinate points from zarr store\n", n_points);
 
     /* Normalize longitude to [-180, 180] */
@@ -646,13 +777,17 @@ USMesh *mesh_create_from_zarr(USFile *file) {
         while (lon[i] < -180.0) lon[i] += 360.0;
     }
 
-    /* Create mesh - zarr data is always unstructured (1D coordinate arrays) */
-    USMesh *mesh = mesh_create(lon, lat, n_points, COORD_TYPE_1D_UNSTRUCTURED);
+    /* Create mesh */
+    USMesh *mesh = mesh_create(lon, lat, n_points, coord_type);
     if (!mesh) {
         free(lon);
         free(lat);
         return NULL;
     }
+
+    /* Store original grid dimensions for structured grids */
+    mesh->orig_nx = orig_nx;
+    mesh->orig_ny = orig_ny;
 
     return mesh;
 }
