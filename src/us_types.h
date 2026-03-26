@@ -10,7 +10,7 @@
 #include <stddef.h>
 
 /* Version */
-#define USHOW_VERSION       "0.1.3"
+#define USHOW_VERSION       "0.1.4"
 
 /* Constants */
 #define EARTH_RADIUS_M      6371000.0
