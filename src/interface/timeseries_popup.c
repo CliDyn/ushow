@@ -506,6 +506,9 @@ static void draw_plot(Widget w) {
     XFlush(ts_display);
 }
 
+/* Forward declarations */
+static void free_all_traces(void);
+
 /* ========== Event Handlers ========== */
 
 static void ts_expose_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
@@ -519,6 +522,7 @@ static void ts_close_callback(Widget w, XtPointer client_data, XtPointer call_da
     (void)w; (void)client_data; (void)call_data;
     if (ts_shell) {
         XtPopdown(ts_shell);
+        free_all_traces();
     }
 }
 
