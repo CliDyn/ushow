@@ -75,7 +75,6 @@ jobs:
 
       - name: Build
         run: |
-          ls /opt/X11/include/X11/ | head -5 || echo "/opt/X11/include/X11 not found"
           make clean
           make X11_PREFIX=/opt/X11 WITH_GRIB=1 WITH_ZARR=1 -j"$(sysctl -n hw.ncpu)"
 
