@@ -1059,6 +1059,18 @@ void x_timeseries_clear(void) {
     timeseries_popup_clear();
 }
 
+void x_update_title(const char *text) {
+    if (!text) return;
+    char buf[512];
+    snprintf(buf, sizeof(buf), "ushow - %s", text);
+    if (top_level)
+        XtVaSetValues(top_level, XtNtitle, buf, NULL);
+    if (image_shell)
+        XtVaSetValues(image_shell, XtNtitle, buf, NULL);
+    if (label_title)
+        XtVaSetValues(label_title, XtNlabel, buf, NULL);
+}
+
 void x_update_render_mode_label(const char *mode_name) {
     if (render_mode_button && mode_name) {
         XtVaSetValues(render_mode_button, XtNlabel, mode_name, NULL);

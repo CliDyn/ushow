@@ -1434,6 +1434,23 @@ int main(int argc, char *argv[]) {
     x_set_mouse_click_callback(on_mouse_click);
     x_set_mouse_right_click_callback(on_mouse_right_click);
 
+    /* Set window title from data source */
+    {
+        const char *display_name = data_filenames[0];
+        /* Use basename: find last '/' */
+        const char *slash = strrchr(display_name, '/');
+        if (slash) display_name = slash + 1;
+
+        if (fileset && fileset->n_files > 1) {
+            char title_buf[512];
+            snprintf(title_buf, sizeof(title_buf), "%s (%d files)",
+                     display_name, fileset->n_files);
+            x_update_title(title_buf);
+        } else {
+            x_update_title(display_name);
+        }
+    }
+
     /* Create view */
     view = view_create();
 
