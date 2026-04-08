@@ -3,11 +3,19 @@
 # Unstructured data visualization tool
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g -fopenmp
-# --enable-new-dtags is Linux-only, skip on macOS (Darwin)
+CFLAGS = -Wall -Wextra -O2 -g
 UNAME_S := $(shell uname -s)
-LDFLAGS = -fopenmp
-ifeq ($(UNAME_S),Darwin)
+LDFLAGS =
+
+# OpenMP: skip if compiler doesn't support it (e.g. Apple Clang)
+OMP_SUPPORTED := $(shell echo 'int main(){return 0;}' | $(CC) -fopenmp -x c - -o /dev/null 2>/dev/null && echo 1 || echo 0)
+ifeq ($(OMP_SUPPORTED),1)
+CFLAGS += -fopenmp
+LDFLAGS += -fopenmp
+endif
+
+# --enable-new-dtags is Linux-only, skip on macOS (Darwin)
+ifneq ($(UNAME_S),Darwin)
 LDFLAGS += -Wl,--enable-new-dtags
 endif
 
@@ -29,21 +37,24 @@ DKRZ_ICE := /sw/spack-levante/libice-1.0.9-2v7j4q
 DKRZ_XMU := /sw/spack-levante/libxmu-1.1.2-4spgxo
 DKRZ_XEXT := /sw/spack-levante/libxext-1.3.3-o4dpxe
 
-X11_PKG_CFLAGS := $(shell pkg-config --cflags x11 xt xaw7 2>/dev/null)
-X11_PKG_LIBS := $(shell pkg-config --libs x11 xt xaw7 2>/dev/null)
-ifneq ($(strip $(X11_PKG_LIBS)),)
-  X11_PKG_INCLUDEDIR := $(shell pkg-config --variable=includedir x11 2>/dev/null)
-  X11_CFLAGS := $(if $(X11_PKG_INCLUDEDIR),-I$(X11_PKG_INCLUDEDIR),) $(X11_PKG_CFLAGS)
-  X11_LIBS := $(X11_PKG_LIBS)
+# X11 detection: X11_PREFIX (command line) > pkg-config > DKRZ > /opt/X11 > /usr/include
+ifdef X11_PREFIX
+  X11_CFLAGS := -I$(X11_PREFIX)/include
+  X11_LIBS := -L$(X11_PREFIX)/lib -lXaw -lXt -lX11
+  X11_RPATH := -Wl,-rpath,$(X11_PREFIX)/lib
 else
-  X11_CFLAGS :=
-  X11_LIBS :=
-endif
-ifeq ($(X11_CFLAGS),)
-  ifdef X11_PREFIX
-    X11_CFLAGS := -I$(X11_PREFIX)/include
-    X11_LIBS := -L$(X11_PREFIX)/lib -lXaw -lXt -lX11
-    X11_RPATH := -Wl,-rpath,$(X11_PREFIX)/lib
+  X11_PKG_CFLAGS := $(shell pkg-config --cflags x11 xt xaw7 2>/dev/null)
+  X11_PKG_LIBS := $(shell pkg-config --libs x11 xt xaw7 2>/dev/null)
+  ifneq ($(strip $(X11_PKG_LIBS)),)
+    X11_PKG_INCLUDEDIR := $(shell pkg-config --variable=includedir x11 2>/dev/null)
+    X11_CFLAGS := $(if $(X11_PKG_INCLUDEDIR),-I$(X11_PKG_INCLUDEDIR),) $(X11_PKG_CFLAGS)
+    X11_LIBS := $(X11_PKG_LIBS)
+    X11_LIBDIR := $(patsubst -L%,%,$(firstword $(filter -L%,$(X11_LIBS))))
+    ifneq ($(X11_LIBDIR),)
+      X11_RPATH := -Wl,-rpath,$(X11_LIBDIR)
+    else
+      X11_RPATH :=
+    endif
   else ifneq ($(wildcard $(DKRZ_X11)/lib/libX11.so),)
     # Use DKRZ spack X11 libraries
     X11_CFLAGS := -I$(DKRZ_X11)/include -I$(DKRZ_XT)/include -I$(DKRZ_XAW)/include -I$(DKRZ_SM)/include -I$(DKRZ_ICE)/include -I$(DKRZ_XMU)/include -I$(DKRZ_XEXT)/include
@@ -56,13 +67,6 @@ ifeq ($(X11_CFLAGS),)
   else
     X11_CFLAGS := -I/usr/include
     X11_LIBS := -lXaw -lXt -lX11
-    X11_RPATH :=
-  endif
-else
-  X11_LIBDIR := $(patsubst -L%,%,$(firstword $(filter -L%,$(X11_LIBS))))
-  ifneq ($(X11_LIBDIR),)
-    X11_RPATH := -Wl,-rpath,$(X11_LIBDIR)
-  else
     X11_RPATH :=
   endif
 endif
@@ -246,11 +250,7 @@ $(UTERM_TARGET): $(UTERM_OBJS)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(BASE_CFLAGS) -I$(SRCDIR) -c -o $@ $<
-
-$(OBJDIR)/interface/%.o: $(SRCDIR)/interface/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(X11_FULL_CFLAGS) -I$(SRCDIR) -c -o $@ $<
+	$(CC) $(if $(findstring interface/,$@),$(X11_FULL_CFLAGS),$(BASE_CFLAGS)) -I$(SRCDIR) -c -o $@ $<
 
 # cJSON object file (zarr support)
 $(OBJDIR)/cJSON/cJSON.o: $(SRCDIR)/cJSON/cJSON.c

@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Build (${{ matrix.name }})
+  test-linux:
+    name: Linux (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -60,3 +60,23 @@ jobs:
       - name: Run tests
         if: matrix.run_tests == 'true'
         run: make ${{ matrix.make_flags }} test
+
+  test-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          brew install netcdf c-blosc lz4 eccodes
+          brew install --cask xquartz  # provides X11 at /opt/X11
+
+      - name: Build
+        run: |
+          make clean
+          make X11_PREFIX=/opt/X11 WITH_GRIB=1 WITH_ZARR=1 -j"$(sysctl -n hw.ncpu)"
+
+      - name: Run tests
+        run: make X11_PREFIX=/opt/X11 WITH_GRIB=1 WITH_ZARR=1 test
