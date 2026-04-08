@@ -170,13 +170,14 @@ TEST(grib_scan_variables_basic) {
 
     int found = 0;
     for (USVar *v = vars; v; v = v->next) {
-        if (strcmp(v->name, "t@surface=0") == 0) {
+        if (strcmp(v->name, "t") == 0) {
             found = 1;
             ASSERT_TRUE(v->node_dim_id >= 0);
             ASSERT_EQ_SIZET(v->dim_sizes[v->node_dim_id], mesh->n_points);
-            ASSERT_EQ_SIZET(v->n_dims, 1);
+            /* depth dim always added for GRIB (even with 1 level), plus node dim */
+            ASSERT_EQ_SIZET(v->n_dims, 2);
             ASSERT_EQ_INT(v->time_dim_id, -1);
-            ASSERT_EQ_INT(v->depth_dim_id, -1);
+            ASSERT_TRUE(v->depth_dim_id >= 0);
         }
     }
     ASSERT_TRUE(found);
