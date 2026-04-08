@@ -88,6 +88,7 @@ static void animation_tick(void);
 static void update_dim_info_current(void);
 static void update_dim_label(void);
 static void on_mouse_click(int px, int py);
+static void on_mouse_right_click(int px, int py);
 
 /* Callbacks */
 static void on_var_select(int var_index) {
@@ -460,6 +461,11 @@ static void on_mouse_click(int px, int py) {
     free(times);
     free(values);
     free(valid);
+}
+
+static void on_mouse_right_click(int px, int py) {
+    (void)px; (void)py;
+    x_timeseries_clear();
 }
 
 static void on_range_adjust(int action) {
@@ -1426,6 +1432,7 @@ int main(int argc, char *argv[]) {
     x_set_render_mode_callback(on_render_mode_toggle);
     x_set_range_button_callback(on_range_button);
     x_set_mouse_click_callback(on_mouse_click);
+    x_set_mouse_right_click_callback(on_mouse_right_click);
 
     /* Create view */
     view = view_create();

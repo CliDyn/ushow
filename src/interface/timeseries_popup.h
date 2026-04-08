@@ -24,6 +24,11 @@ void timeseries_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx);
 void timeseries_popup_show(const TSData *data);
 
 /*
+ * Clear all traces (right-click reset).
+ */
+void timeseries_popup_clear(void);
+
+/*
  * Cleanup timeseries popup resources.
  */
 void timeseries_popup_cleanup(void);
