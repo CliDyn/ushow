@@ -176,7 +176,16 @@ test_latband: test_latband.c $(HEALPIX_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
 
 VIEW_OBJ = $(SRCDIR)/view.c
 
-test_regional_range: test_regional_range.c $(VIEW_OBJ) $(FILE_NETCDF_OBJ) $(FILE_MITGCM_OBJ) $(REGRID_OBJ) $(PROJECTION_OBJ) $(COLORMAPS_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+# view.c references zarr/grib functions when those features are enabled
+VIEW_DEPS = $(VIEW_OBJ) $(FILE_NETCDF_OBJ) $(FILE_MITGCM_OBJ) $(REGRID_OBJ) $(PROJECTION_OBJ) $(COLORMAPS_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
+ifdef WITH_ZARR
+VIEW_DEPS += $(FILE_ZARR_OBJ)
+endif
+ifdef WITH_GRIB
+VIEW_DEPS += $(FILE_GRIB_OBJ)
+endif
+
+test_regional_range: test_regional_range.c $(VIEW_DEPS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # GRIB test (only built with WITH_GRIB=1)
