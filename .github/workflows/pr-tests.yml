@@ -71,24 +71,25 @@ jobs:
       - name: Install system dependencies
         run: |
           brew install netcdf c-blosc lz4 eccodes libxaw libxt libx11 libxmu libxext xorgproto
-
-      - name: Set up Homebrew PKG_CONFIG_PATH
-        run: |
-          # Homebrew X11 packages install .pc files in per-package prefixes
+          # Homebrew X11 packages install .pc files in per-package prefixes;
+          # collect them into PKG_CONFIG_PATH for subsequent steps
           PKG_DIRS=""
           for pkg in libxaw libxt libx11 libxmu libxext libxcb libsm libice; do
             dir="$(brew --prefix $pkg 2>/dev/null)/lib/pkgconfig"
             [ -d "$dir" ] && PKG_DIRS="${PKG_DIRS:+$PKG_DIRS:}$dir"
           done
-          # xorgproto uses share/pkgconfig
           dir="$(brew --prefix xorgproto 2>/dev/null)/share/pkgconfig"
           [ -d "$dir" ] && PKG_DIRS="${PKG_DIRS:+$PKG_DIRS:}$dir"
-          echo "PKG_CONFIG_PATH=${PKG_DIRS}:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+          echo "X11_PKG_CONFIG_PATH=$PKG_DIRS" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
+          export PKG_CONFIG_PATH="${X11_PKG_CONFIG_PATH}:${PKG_CONFIG_PATH:-}"
+          pkg-config --cflags x11 xt xaw7  # verify X11 detection
           make clean
           make WITH_GRIB=1 WITH_ZARR=1 -j"$(sysctl -n hw.ncpu)"
 
       - name: Run tests
-        run: make WITH_GRIB=1 WITH_ZARR=1 test
+        run: |
+          export PKG_CONFIG_PATH="${X11_PKG_CONFIG_PATH}:${PKG_CONFIG_PATH:-}"
+          make WITH_GRIB=1 WITH_ZARR=1 test
