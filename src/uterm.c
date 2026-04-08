@@ -14,6 +14,7 @@
 #include "regrid_yac.h"
 #endif
 #include "file_netcdf.h"
+#include "file_mitgcm.h"
 #ifdef HAVE_ZARR
 #include "file_zarr.h"
 #endif
@@ -301,6 +302,9 @@ static int set_variable_index(int idx) {
     current_var = var_array[idx];
 
     if (current_dim_info) {
+        if (current_var->file && current_var->file->file_type == FILE_TYPE_MITGCM) {
+            mitgcm_free_dim_info(current_dim_info, n_current_dims);
+        } else
 #ifdef HAVE_GRIB
         if (current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
             grib_free_dim_info(current_dim_info, n_current_dims);
@@ -318,6 +322,9 @@ static int set_variable_index(int idx) {
         n_current_dims = 0;
     }
 
+    if (current_var->file && current_var->file->file_type == FILE_TYPE_MITGCM) {
+        current_dim_info = mitgcm_get_dim_info(current_var, &n_current_dims);
+    } else
 #ifdef HAVE_ZARR
     if (zarr_fileset) {
         current_dim_info = zarr_get_dim_info_fileset(zarr_fileset, current_var, &n_current_dims);
@@ -669,6 +676,15 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
         }
     }
 
+    if (!use_glob && n_data_files == 1 && mitgcm_is_mitgcm(data_filenames[0])) {
+        file = mitgcm_open(data_filenames[0]);
+        if (!file) {
+            fprintf(stderr, "Failed to open MITgcm data: %s\n", data_filenames[0]);
+            return -1;
+        }
+        return 0;
+    }
+
 #ifdef HAVE_GRIB
     if (!use_glob && n_data_files == 1 && grib_is_grib_file(data_filenames[0])) {
         file = grib_open(data_filenames[0]);
@@ -782,6 +798,9 @@ static int open_data_files(int n_data_files, const char **data_filenames) {
 
 static void cleanup_all(void) {
     if (current_dim_info) {
+        if (current_var && current_var->file && current_var->file->file_type == FILE_TYPE_MITGCM) {
+            mitgcm_free_dim_info(current_dim_info, n_current_dims);
+        } else
 #ifdef HAVE_GRIB
         if (current_var && current_var->file && current_var->file->file_type == FILE_TYPE_GRIB) {
             grib_free_dim_info(current_dim_info, n_current_dims);
@@ -826,6 +845,10 @@ static void cleanup_all(void) {
     mesh_free(mesh);
     mesh = NULL;
 
+    if (file && file->file_type == FILE_TYPE_MITGCM) {
+        mitgcm_close(file);
+        file = NULL;
+    } else
 #ifdef HAVE_ZARR
     if (zarr_fileset) {
         zarr_close_fileset(zarr_fileset);
@@ -1028,6 +1051,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (file->file_type == FILE_TYPE_MITGCM) {
+        mesh = mitgcm_create_mesh(file);
+    } else
 #ifdef HAVE_ZARR
     if (file->file_type == FILE_TYPE_ZARR) {
         mesh = mesh_create_from_zarr(file);
@@ -1082,6 +1108,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (file->file_type == FILE_TYPE_MITGCM) {
+        variables = mitgcm_scan_variables(file, mesh);
+    } else
 #ifdef HAVE_ZARR
     if (file->file_type == FILE_TYPE_ZARR) {
         variables = zarr_scan_variables(file, mesh);
