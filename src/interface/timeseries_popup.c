@@ -1,8 +1,9 @@
 /*
  * timeseries_popup.c - Time series plot popup window
  *
- * Non-modal popup with custom XLib drawing that displays a time series
- * plot (value vs time) at a clicked spatial location.
+ * Non-modal popup with custom XLib drawing that displays overlaid time series
+ * plots (value vs time) at clicked spatial locations. Up to MAX_TRACES traces
+ * are kept in a ring buffer; oldest is dropped when full. Right-click clears.
  */
 
 #include "timeseries_popup.h"
@@ -28,6 +29,7 @@
 #define MARGIN_BOTTOM   60
 #define TICK_LEN        5
 #define DOT_RADIUS      3
+#define MAX_TRACES      8
 
 /* X11 handles */
 static Display *ts_display = NULL;
@@ -37,16 +39,18 @@ static Widget ts_close_btn = NULL;
 static GC ts_gc = None;
 
 /* Colors */
-static unsigned long color_blue = 0;
 static unsigned long color_gray = 0;
 static unsigned long color_bg = 0;
 static unsigned long color_axis = 0;
 static unsigned long color_label = 0;
+static unsigned long trace_colors[MAX_TRACES];
 static int colors_allocated = 0;
 
-/* Cached data (deep copy) */
-static TSData ts_cache;
-static int ts_cache_valid = 0;
+/* Multi-trace ring buffer */
+static TSData traces[MAX_TRACES];
+static int trace_valid[MAX_TRACES];  /* 1 if slot has data */
+static int trace_count = 0;         /* number of active traces */
+static int trace_head = 0;          /* next write position */
 
 /* ========== CF Time Formatting (self-contained) ========== */
 
@@ -175,73 +179,71 @@ static void compute_ticks(double data_min, double data_max, int max_ticks,
 
 /* ========== Allocate Colors ========== */
 
+static unsigned long alloc_color(int screen, Colormap cmap,
+                                 unsigned short r, unsigned short g, unsigned short b,
+                                 unsigned long fallback) {
+    XColor xc;
+    xc.red = r; xc.green = g; xc.blue = b;
+    xc.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(ts_display, cmap, &xc))
+        return xc.pixel;
+    return fallback;
+}
+
 static void allocate_colors(void) {
     if (colors_allocated || !ts_display) return;
 
     int screen = DefaultScreen(ts_display);
     Colormap cmap = DefaultColormap(ts_display, screen);
-    XColor xc;
     int is_light = x_is_light_theme();
+    unsigned long black = BlackPixel(ts_display, screen);
+    unsigned long white = WhitePixel(ts_display, screen);
 
-    /* Blue for data line */
+    /* 8 trace colors — visually distinct on both themes */
     if (is_light) {
-        xc.red = 0x2222; xc.green = 0x5555; xc.blue = 0xCCCC;
+        trace_colors[0] = alloc_color(screen, cmap, 0x2222, 0x5555, 0xCCCC, black); /* blue */
+        trace_colors[1] = alloc_color(screen, cmap, 0xCC00, 0x3333, 0x3333, black); /* red */
+        trace_colors[2] = alloc_color(screen, cmap, 0x2222, 0x8888, 0x2222, black); /* green */
+        trace_colors[3] = alloc_color(screen, cmap, 0xCC00, 0x7700, 0x0000, black); /* orange */
+        trace_colors[4] = alloc_color(screen, cmap, 0x8800, 0x2222, 0xAA00, black); /* purple */
+        trace_colors[5] = alloc_color(screen, cmap, 0x0000, 0x8888, 0x8888, black); /* cyan */
+        trace_colors[6] = alloc_color(screen, cmap, 0xBB00, 0x2222, 0x8800, black); /* magenta */
+        trace_colors[7] = alloc_color(screen, cmap, 0x8800, 0x5500, 0x1100, black); /* brown */
     } else {
-        xc.red = 0x5555; xc.green = 0x9999; xc.blue = 0xFFFF;
+        trace_colors[0] = alloc_color(screen, cmap, 0x5555, 0x9999, 0xFFFF, white); /* blue */
+        trace_colors[1] = alloc_color(screen, cmap, 0xFFFF, 0x5555, 0x5555, white); /* red */
+        trace_colors[2] = alloc_color(screen, cmap, 0x5555, 0xDD00, 0x5555, white); /* green */
+        trace_colors[3] = alloc_color(screen, cmap, 0xFFFF, 0xAA00, 0x3333, white); /* orange */
+        trace_colors[4] = alloc_color(screen, cmap, 0xBB00, 0x5555, 0xFFFF, white); /* purple */
+        trace_colors[5] = alloc_color(screen, cmap, 0x5555, 0xEEEE, 0xEEEE, white); /* cyan */
+        trace_colors[6] = alloc_color(screen, cmap, 0xFFFF, 0x5555, 0xCC00, white); /* magenta */
+        trace_colors[7] = alloc_color(screen, cmap, 0xCC00, 0x8888, 0x3333, white); /* brown */
     }
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc))
-        color_blue = xc.pixel;
-    else
-        color_blue = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
 
     /* Grid lines */
-    if (is_light) {
-        xc.red = 0xCCCC; xc.green = 0xCCCC; xc.blue = 0xCCCC;
-    } else {
-        xc.red = 0x4444; xc.green = 0x4444; xc.blue = 0x4444;
-    }
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc))
-        color_gray = xc.pixel;
+    if (is_light)
+        color_gray = alloc_color(screen, cmap, 0xCCCC, 0xCCCC, 0xCCCC, white);
     else
-        color_gray = is_light ? WhitePixel(ts_display, screen) : BlackPixel(ts_display, screen);
+        color_gray = alloc_color(screen, cmap, 0x4444, 0x4444, 0x4444, black);
 
     /* Background */
     if (is_light) {
-        color_bg = WhitePixel(ts_display, screen);
+        color_bg = white;
     } else {
-        xc.red = 0x1E1E; xc.green = 0x1E1E; xc.blue = 0x1E1E;
-        xc.flags = DoRed | DoGreen | DoBlue;
-        if (XAllocColor(ts_display, cmap, &xc))
-            color_bg = xc.pixel;
-        else
-            color_bg = BlackPixel(ts_display, screen);
+        color_bg = alloc_color(screen, cmap, 0x1E1E, 0x1E1E, 0x1E1E, black);
     }
 
     /* Axis color */
-    if (is_light) {
-        xc.red = 0x4444; xc.green = 0x4444; xc.blue = 0x4444;
-    } else {
-        xc.red = 0x8888; xc.green = 0x8888; xc.blue = 0x8888;
-    }
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc))
-        color_axis = xc.pixel;
+    if (is_light)
+        color_axis = alloc_color(screen, cmap, 0x4444, 0x4444, 0x4444, black);
     else
-        color_axis = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
+        color_axis = alloc_color(screen, cmap, 0x8888, 0x8888, 0x8888, white);
 
     /* Label color */
-    if (is_light) {
-        xc.red = 0x2222; xc.green = 0x2222; xc.blue = 0x2222;
-    } else {
-        xc.red = 0xCCCC; xc.green = 0xCCCC; xc.blue = 0xCCCC;
-    }
-    xc.flags = DoRed | DoGreen | DoBlue;
-    if (XAllocColor(ts_display, cmap, &xc))
-        color_label = xc.pixel;
+    if (is_light)
+        color_label = alloc_color(screen, cmap, 0x2222, 0x2222, 0x2222, black);
     else
-        color_label = is_light ? BlackPixel(ts_display, screen) : WhitePixel(ts_display, screen);
+        color_label = alloc_color(screen, cmap, 0xCCCC, 0xCCCC, 0xCCCC, white);
 
     colors_allocated = 1;
 }
@@ -249,7 +251,7 @@ static void allocate_colors(void) {
 /* ========== Drawing ========== */
 
 static void draw_plot(Widget w) {
-    if (!ts_cache_valid || !ts_display || ts_gc == None) return;
+    if (trace_count == 0 || !ts_display || ts_gc == None) return;
     if (!XtIsRealized(w)) return;
 
     Window win = XtWindow(w);
@@ -264,31 +266,35 @@ static void draw_plot(Widget w) {
     int plot_w = plot_x1 - plot_x0;
     int plot_h = plot_y1 - plot_y0;
 
-    /* Dark background */
+    /* Background */
     XSetForeground(ts_display, ts_gc, color_bg);
     XFillRectangle(ts_display, win, ts_gc, 0, 0, PLOT_WIDTH, PLOT_HEIGHT);
 
-    /* Compute data range for Y axis (valid values only) */
+    /* Compute Y range across ALL traces */
     double y_min = 1e30, y_max = -1e30;
-    for (size_t i = 0; i < ts_cache.n_points; i++) {
-        if (ts_cache.valid[i]) {
-            double v = (double)ts_cache.values[i];
-            if (v < y_min) y_min = v;
-            if (v > y_max) y_max = v;
+    double x_min = 1e30, x_max = -1e30;
+    /* Use first valid trace for x_label (CF time detection) */
+    const char *x_label = "";
+    const char *y_label = "";
+
+    for (int t = 0; t < MAX_TRACES; t++) {
+        if (!trace_valid[t]) continue;
+        TSData *tr = &traces[t];
+        if (x_label[0] == '\0' && tr->x_label[0] != '\0') x_label = tr->x_label;
+        if (y_label[0] == '\0' && tr->y_label[0] != '\0') y_label = tr->y_label;
+        for (size_t i = 0; i < tr->n_points; i++) {
+            if (tr->valid[i]) {
+                double v = (double)tr->values[i];
+                if (v < y_min) y_min = v;
+                if (v > y_max) y_max = v;
+            }
+            double tx = tr->times[i];
+            if (tx < x_min) x_min = tx;
+            if (tx > x_max) x_max = tx;
         }
     }
-    if (y_min >= y_max) {
-        y_min -= 0.5;
-        y_max += 0.5;
-    }
-
-    /* X axis range */
-    double x_min = ts_cache.times[0];
-    double x_max = ts_cache.times[ts_cache.n_points - 1];
-    if (x_min >= x_max) {
-        x_min -= 0.5;
-        x_max += 0.5;
-    }
+    if (y_min >= y_max) { y_min -= 0.5; y_max += 0.5; }
+    if (x_min >= x_max) { x_min -= 0.5; x_max += 0.5; }
 
     /* Compute ticks */
     double y_tick_min, y_tick_max, y_tick_step;
@@ -299,39 +305,31 @@ static void draw_plot(Widget w) {
     int n_x_ticks;
     compute_ticks(x_min, x_max, 6, &x_tick_min, &x_tick_max, &x_tick_step, &n_x_ticks);
 
-    /* Use tick range for actual plot range */
     double range_y = y_tick_max - y_tick_min;
     double range_x = x_tick_max - x_tick_min;
     if (range_y <= 0) range_y = 1.0;
     if (range_x <= 0) range_x = 1.0;
 
-    /* Check if CF time formatting is possible */
-    int use_cf_time = (ts_cache.x_label[0] != '\0' && strstr(ts_cache.x_label, "since") != NULL);
+    int use_cf_time = (x_label[0] != '\0' && strstr(x_label, "since") != NULL);
 
-    /* Draw grid lines (light gray) */
+    /* Draw grid lines */
     XSetForeground(ts_display, ts_gc, color_gray);
-
-    /* Y grid */
     for (int i = 0; i < n_y_ticks; i++) {
         double val = y_tick_min + i * y_tick_step;
         if (val > y_tick_max + y_tick_step * 0.01) break;
         int py = plot_y1 - (int)((val - y_tick_min) / range_y * plot_h);
-        if (py >= plot_y0 && py <= plot_y1) {
+        if (py >= plot_y0 && py <= plot_y1)
             XDrawLine(ts_display, win, ts_gc, plot_x0, py, plot_x1, py);
-        }
     }
-
-    /* X grid */
     for (int i = 0; i < n_x_ticks; i++) {
         double val = x_tick_min + i * x_tick_step;
         if (val > x_tick_max + x_tick_step * 0.01) break;
         int px = plot_x0 + (int)((val - x_tick_min) / range_x * plot_w);
-        if (px >= plot_x0 && px <= plot_x1) {
+        if (px >= plot_x0 && px <= plot_x1)
             XDrawLine(ts_display, win, ts_gc, px, plot_y0, px, plot_y1);
-        }
     }
 
-    /* Draw axes (gray) */
+    /* Draw axes */
     XSetForeground(ts_display, ts_gc, color_axis);
     XDrawRectangle(ts_display, win, ts_gc, plot_x0, plot_y0, plot_w, plot_h);
 
@@ -346,11 +344,9 @@ static void draw_plot(Widget w) {
         int py = plot_y1 - (int)((val - y_tick_min) / range_y * plot_h);
         if (py < plot_y0 || py > plot_y1) continue;
 
-        /* Tick mark */
         XSetForeground(ts_display, ts_gc, color_axis);
         XDrawLine(ts_display, win, ts_gc, plot_x0 - TICK_LEN, py, plot_x0, py);
 
-        /* Label */
         XSetForeground(ts_display, ts_gc, color_label);
         char buf[32];
         snprintf(buf, sizeof(buf), "%.4g", val);
@@ -367,15 +363,13 @@ static void draw_plot(Widget w) {
         int px = plot_x0 + (int)((val - x_tick_min) / range_x * plot_w);
         if (px < plot_x0 || px > plot_x1) continue;
 
-        /* Tick mark */
         XSetForeground(ts_display, ts_gc, color_axis);
         XDrawLine(ts_display, win, ts_gc, px, plot_y1, px, plot_y1 + TICK_LEN);
 
-        /* Label */
         XSetForeground(ts_display, ts_gc, color_label);
         char buf[32];
         if (use_cf_time) {
-            if (!ts_format_time(buf, sizeof(buf), val, ts_cache.x_label))
+            if (!ts_format_time(buf, sizeof(buf), val, x_label))
                 snprintf(buf, sizeof(buf), "%.4g", val);
         } else {
             snprintf(buf, sizeof(buf), "%.4g", val);
@@ -387,69 +381,118 @@ static void draw_plot(Widget w) {
     }
 
     /* X-axis label */
-    if (ts_cache.x_label[0]) {
-        const char *xlabel = use_cf_time ? "Date" : ts_cache.x_label;
+    if (x_label[0]) {
+        const char *xlabel = use_cf_time ? "Date" : x_label;
         int tw = font ? XTextWidth(font, xlabel, (int)strlen(xlabel)) : 40;
+        XSetForeground(ts_display, ts_gc, color_label);
         XDrawString(ts_display, win, ts_gc,
-                    plot_x0 + plot_w / 2 - tw / 2,
-                    PLOT_HEIGHT - 5,
+                    plot_x0 + plot_w / 2 - tw / 2, PLOT_HEIGHT - 5,
                     xlabel, (int)strlen(xlabel));
     }
 
-    /* Y-axis label (drawn horizontally at top-left) */
-    if (ts_cache.y_label[0]) {
+    /* Y-axis label */
+    if (y_label[0]) {
+        XSetForeground(ts_display, ts_gc, color_label);
         XDrawString(ts_display, win, ts_gc,
                     4, plot_y0 - 8,
-                    ts_cache.y_label, (int)strlen(ts_cache.y_label));
+                    y_label, (int)strlen(y_label));
     }
 
-    /* Title (centered at top) */
-    if (ts_cache.title[0]) {
-        int tw = font ? XTextWidth(font, ts_cache.title, (int)strlen(ts_cache.title)) : 100;
+    /* Title */
+    {
+        char title_buf[128];
+        if (trace_count == 1) {
+            /* Find the single valid trace and use its title */
+            for (int t = 0; t < MAX_TRACES; t++) {
+                if (trace_valid[t]) {
+                    snprintf(title_buf, sizeof(title_buf), "%s", traces[t].title);
+                    break;
+                }
+            }
+        } else {
+            snprintf(title_buf, sizeof(title_buf), "Time Series (%d traces)", trace_count);
+        }
+        int tw = font ? XTextWidth(font, title_buf, (int)strlen(title_buf)) : 100;
+        XSetForeground(ts_display, ts_gc, color_label);
         XDrawString(ts_display, win, ts_gc,
-                    PLOT_WIDTH / 2 - tw / 2,
-                    font_ascent + 4,
-                    ts_cache.title, (int)strlen(ts_cache.title));
+                    PLOT_WIDTH / 2 - tw / 2, font_ascent + 4,
+                    title_buf, (int)strlen(title_buf));
     }
 
-    /* Draw data line (blue, 2px thick) */
-    XSetForeground(ts_display, ts_gc, color_blue);
+    /* Draw all traces */
     XSetLineAttributes(ts_display, ts_gc, 2, LineSolid, CapRound, JoinRound);
 
-    int prev_px = -1, prev_py = -1;
-    int prev_valid = 0;
+    int color_idx = 0;
+    for (int t = 0; t < MAX_TRACES; t++) {
+        if (!trace_valid[t]) continue;
+        TSData *tr = &traces[t];
 
-    for (size_t i = 0; i < ts_cache.n_points; i++) {
-        if (!ts_cache.valid[i]) {
-            prev_valid = 0;
-            continue;
+        XSetForeground(ts_display, ts_gc, trace_colors[color_idx % MAX_TRACES]);
+
+        int prev_px = -1, prev_py = -1;
+        int prev_valid = 0;
+
+        for (size_t i = 0; i < tr->n_points; i++) {
+            if (!tr->valid[i]) {
+                prev_valid = 0;
+                continue;
+            }
+
+            double tx = tr->times[i];
+            double v = (double)tr->values[i];
+
+            int px = plot_x0 + (int)((tx - x_tick_min) / range_x * plot_w);
+            int py = plot_y1 - (int)((v - y_tick_min) / range_y * plot_h);
+
+            if (px < plot_x0) px = plot_x0;
+            if (px > plot_x1) px = plot_x1;
+            if (py < plot_y0) py = plot_y0;
+            if (py > plot_y1) py = plot_y1;
+
+            if (prev_valid)
+                XDrawLine(ts_display, win, ts_gc, prev_px, prev_py, px, py);
+
+            XFillArc(ts_display, win, ts_gc,
+                     px - DOT_RADIUS, py - DOT_RADIUS,
+                     DOT_RADIUS * 2, DOT_RADIUS * 2, 0, 360 * 64);
+
+            prev_px = px;
+            prev_py = py;
+            prev_valid = 1;
         }
+        color_idx++;
+    }
 
-        double t = ts_cache.times[i];
-        double v = (double)ts_cache.values[i];
+    /* Legend (top-right corner) */
+    if (trace_count > 1) {
+        int legend_x = plot_x1 - 150;
+        int legend_y = plot_y0 + 5;
+        int line_h = font_ascent + 4;
 
-        int px = plot_x0 + (int)((t - x_tick_min) / range_x * plot_w);
-        int py = plot_y1 - (int)((v - y_tick_min) / range_y * plot_h);
+        color_idx = 0;
+        for (int t = 0; t < MAX_TRACES; t++) {
+            if (!trace_valid[t]) continue;
 
-        /* Clamp to plot area */
-        if (px < plot_x0) px = plot_x0;
-        if (px > plot_x1) px = plot_x1;
-        if (py < plot_y0) py = plot_y0;
-        if (py > plot_y1) py = plot_y1;
+            /* Extract short location label from title: find "at ..." part */
+            const char *loc = strstr(traces[t].title, "at ");
+            const char *label = loc ? loc : traces[t].title;
+            char short_label[32];
+            snprintf(short_label, sizeof(short_label), "%s", label);
 
-        /* Connect to previous valid point */
-        if (prev_valid) {
-            XDrawLine(ts_display, win, ts_gc, prev_px, prev_py, px, py);
+            /* Colored line segment */
+            XSetForeground(ts_display, ts_gc, trace_colors[color_idx % MAX_TRACES]);
+            XDrawLine(ts_display, win, ts_gc,
+                      legend_x, legend_y + color_idx * line_h + font_ascent / 2,
+                      legend_x + 15, legend_y + color_idx * line_h + font_ascent / 2);
+
+            /* Label text */
+            XSetForeground(ts_display, ts_gc, color_label);
+            XDrawString(ts_display, win, ts_gc,
+                        legend_x + 20, legend_y + color_idx * line_h + font_ascent,
+                        short_label, (int)strlen(short_label));
+
+            color_idx++;
         }
-
-        /* Small dot at each valid data point */
-        XFillArc(ts_display, win, ts_gc,
-                 px - DOT_RADIUS, py - DOT_RADIUS,
-                 DOT_RADIUS * 2, DOT_RADIUS * 2, 0, 360 * 64);
-
-        prev_px = px;
-        prev_py = py;
-        prev_valid = 1;
     }
 
     /* Reset line width */
@@ -462,6 +505,9 @@ static void draw_plot(Widget w) {
 
     XFlush(ts_display);
 }
+
+/* Forward declarations */
+static void free_all_traces(void);
 
 /* ========== Event Handlers ========== */
 
@@ -476,49 +522,63 @@ static void ts_close_callback(Widget w, XtPointer client_data, XtPointer call_da
     (void)w; (void)client_data; (void)call_data;
     if (ts_shell) {
         XtPopdown(ts_shell);
+        free_all_traces();
     }
 }
 
-/* ========== Cache Management ========== */
+/* ========== Trace Management ========== */
 
-static void free_cache(void) {
-    if (ts_cache_valid) {
-        free(ts_cache.times);
-        free(ts_cache.values);
-        free(ts_cache.valid);
-        ts_cache.times = NULL;
-        ts_cache.values = NULL;
-        ts_cache.valid = NULL;
-        ts_cache_valid = 0;
+static void free_trace(int idx) {
+    if (trace_valid[idx]) {
+        free(traces[idx].times);
+        free(traces[idx].values);
+        free(traces[idx].valid);
+        traces[idx].times = NULL;
+        traces[idx].values = NULL;
+        traces[idx].valid = NULL;
+        trace_valid[idx] = 0;
     }
 }
 
-static void copy_to_cache(const TSData *data) {
-    free_cache();
+static void free_all_traces(void) {
+    for (int i = 0; i < MAX_TRACES; i++)
+        free_trace(i);
+    trace_count = 0;
+    trace_head = 0;
+}
 
-    ts_cache.n_points = data->n_points;
-    ts_cache.n_valid = data->n_valid;
-    memcpy(ts_cache.title, data->title, sizeof(ts_cache.title));
-    memcpy(ts_cache.x_label, data->x_label, sizeof(ts_cache.x_label));
-    memcpy(ts_cache.y_label, data->y_label, sizeof(ts_cache.y_label));
+static void add_trace(const TSData *data) {
+    /* Free old trace at this slot if occupied */
+    free_trace(trace_head);
 
-    ts_cache.times = malloc(data->n_points * sizeof(double));
-    ts_cache.values = malloc(data->n_points * sizeof(float));
-    ts_cache.valid = malloc(data->n_points * sizeof(int));
+    TSData *tr = &traces[trace_head];
+    tr->n_points = data->n_points;
+    tr->n_valid = data->n_valid;
+    memcpy(tr->title, data->title, sizeof(tr->title));
+    memcpy(tr->x_label, data->x_label, sizeof(tr->x_label));
+    memcpy(tr->y_label, data->y_label, sizeof(tr->y_label));
 
-    if (ts_cache.times && ts_cache.values && ts_cache.valid) {
-        memcpy(ts_cache.times, data->times, data->n_points * sizeof(double));
-        memcpy(ts_cache.values, data->values, data->n_points * sizeof(float));
-        memcpy(ts_cache.valid, data->valid, data->n_points * sizeof(int));
-        ts_cache_valid = 1;
+    tr->times = malloc(data->n_points * sizeof(double));
+    tr->values = malloc(data->n_points * sizeof(float));
+    tr->valid = malloc(data->n_points * sizeof(int));
+
+    if (tr->times && tr->values && tr->valid) {
+        memcpy(tr->times, data->times, data->n_points * sizeof(double));
+        memcpy(tr->values, data->values, data->n_points * sizeof(float));
+        memcpy(tr->valid, data->valid, data->n_points * sizeof(int));
+        trace_valid[trace_head] = 1;
+        if (trace_count < MAX_TRACES) trace_count++;
     } else {
-        free(ts_cache.times);
-        free(ts_cache.values);
-        free(ts_cache.valid);
-        ts_cache.times = NULL;
-        ts_cache.values = NULL;
-        ts_cache.valid = NULL;
+        free(tr->times);
+        free(tr->values);
+        free(tr->valid);
+        tr->times = NULL;
+        tr->values = NULL;
+        tr->valid = NULL;
+        return;
     }
+
+    trace_head = (trace_head + 1) % MAX_TRACES;
 }
 
 /* ========== Public API ========== */
@@ -526,6 +586,9 @@ static void copy_to_cache(const TSData *data) {
 void timeseries_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
     (void)app_ctx;
     ts_display = dpy;
+
+    memset(traces, 0, sizeof(traces));
+    memset(trace_valid, 0, sizeof(trace_valid));
 
     /* Create popup shell (non-modal) */
     ts_shell = XtVaCreatePopupShell(
@@ -567,9 +630,8 @@ void timeseries_popup_init(Widget parent, Display *dpy, XtAppContext app_ctx) {
 void timeseries_popup_show(const TSData *data) {
     if (!data || !ts_shell || !ts_plot_widget) return;
 
-    /* Deep copy data */
-    copy_to_cache(data);
-    if (!ts_cache_valid) return;
+    /* Add trace to ring buffer */
+    add_trace(data);
 
     /* Create GC if needed */
     if (ts_gc == None && XtIsRealized(ts_shell)) {
@@ -577,7 +639,14 @@ void timeseries_popup_show(const TSData *data) {
     }
 
     /* Update title */
-    XtVaSetValues(ts_shell, XtNtitle, data->title[0] ? data->title : "Time Series", NULL);
+    char title_buf[128];
+    if (trace_count == 1) {
+        snprintf(title_buf, sizeof(title_buf), "%s",
+                 data->title[0] ? data->title : "Time Series");
+    } else {
+        snprintf(title_buf, sizeof(title_buf), "Time Series (%d traces)", trace_count);
+    }
+    XtVaSetValues(ts_shell, XtNtitle, title_buf, NULL);
 
     /* Show popup (non-modal) */
     XtPopup(ts_shell, XtGrabNone);
@@ -593,8 +662,20 @@ void timeseries_popup_show(const TSData *data) {
     }
 }
 
+void timeseries_popup_clear(void) {
+    free_all_traces();
+    /* Redraw empty plot if visible */
+    if (ts_shell && ts_plot_widget && XtIsRealized(ts_plot_widget) && ts_gc != None) {
+        Window win = XtWindow(ts_plot_widget);
+        allocate_colors();
+        XSetForeground(ts_display, ts_gc, color_bg);
+        XFillRectangle(ts_display, win, ts_gc, 0, 0, PLOT_WIDTH, PLOT_HEIGHT);
+        XFlush(ts_display);
+    }
+}
+
 void timeseries_popup_cleanup(void) {
-    free_cache();
+    free_all_traces();
     if (ts_gc != None && ts_display) {
         XFreeGC(ts_display, ts_gc);
         ts_gc = None;

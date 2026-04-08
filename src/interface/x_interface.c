@@ -138,6 +138,7 @@ typedef void (*RangeButtonCallback)(void);
 static RangeButtonCallback range_button_cb = NULL;
 
 static MouseClickCallback mouse_click_cb = NULL;
+static MouseClickCallback mouse_right_click_cb = NULL;
 
 /* Render mode button */
 static Widget render_mode_button = NULL;
@@ -319,8 +320,12 @@ static void image_motion_callback(Widget w, XtPointer client_data, XEvent *event
 
 static void image_click_callback(Widget w, XtPointer client_data, XEvent *event, Boolean *cont) {
     (void)w; (void)client_data; (void)cont;
-    if (event->type == ButtonPress && event->xbutton.button == Button1 && mouse_click_cb) {
-        mouse_click_cb(event->xbutton.x, event->xbutton.y);
+    if (event->type == ButtonPress) {
+        if (event->xbutton.button == Button1 && mouse_click_cb) {
+            mouse_click_cb(event->xbutton.x, event->xbutton.y);
+        } else if (event->xbutton.button == Button3 && mouse_right_click_cb) {
+            mouse_right_click_cb(event->xbutton.x, event->xbutton.y);
+        }
     }
 }
 
@@ -1044,9 +1049,14 @@ void x_set_dim_nav_callback(DimNavCallback cb) { dim_nav_cb = cb; }
 void x_set_render_mode_callback(void (*cb)(void)) { render_mode_cb = cb; }
 void x_set_range_button_callback(void (*cb)(void)) { range_button_cb = cb; }
 void x_set_mouse_click_callback(MouseClickCallback cb) { mouse_click_cb = cb; }
+void x_set_mouse_right_click_callback(MouseClickCallback cb) { mouse_right_click_cb = cb; }
 
 void x_show_timeseries(const TSData *data) {
     timeseries_popup_show(data);
+}
+
+void x_timeseries_clear(void) {
+    timeseries_popup_clear();
 }
 
 void x_update_render_mode_label(const char *mode_name) {
