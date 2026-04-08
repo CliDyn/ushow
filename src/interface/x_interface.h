@@ -63,6 +63,12 @@ void x_show_timeseries(const TSData *data);
 void x_timeseries_clear(void);
 
 /*
+ * Update window titles and title label with data source name.
+ * Sets both window manager titles and the control panel label to "ushow - <text>".
+ */
+void x_update_title(const char *text);
+
+/*
  * Update render mode label.
  */
 void x_update_render_mode_label(const char *mode_name);
