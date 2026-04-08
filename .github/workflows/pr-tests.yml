@@ -70,7 +70,20 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          brew install netcdf c-blosc lz4 eccodes libxaw libxt
+          brew install netcdf c-blosc lz4 eccodes libxaw libxt libx11 libxmu libxext xorgproto
+
+      - name: Set up Homebrew PKG_CONFIG_PATH
+        run: |
+          # Homebrew X11 packages install .pc files in per-package prefixes
+          PKG_DIRS=""
+          for pkg in libxaw libxt libx11 libxmu libxext libxcb libsm libice; do
+            dir="$(brew --prefix $pkg 2>/dev/null)/lib/pkgconfig"
+            [ -d "$dir" ] && PKG_DIRS="${PKG_DIRS:+$PKG_DIRS:}$dir"
+          done
+          # xorgproto uses share/pkgconfig
+          dir="$(brew --prefix xorgproto 2>/dev/null)/share/pkgconfig"
+          [ -d "$dir" ] && PKG_DIRS="${PKG_DIRS:+$PKG_DIRS:}$dir"
+          echo "PKG_CONFIG_PATH=${PKG_DIRS}:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
