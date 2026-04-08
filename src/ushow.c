@@ -735,11 +735,7 @@ static void on_dim_nav(int dim_index, int direction) {
 static void animation_tick(void) {
     if (!animating || !view) return;
 
-    int result = view_step_time(view, 1);
-    if (result < 0) {
-        /* Reached end, loop back to start */
-        view_set_time(view, 0);
-    }
+    view_step_time(view, 1);
 
     x_update_time(view->time_index, view->n_times);
     update_dim_label();

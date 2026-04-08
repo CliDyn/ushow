@@ -1289,9 +1289,7 @@ int main(int argc, char *argv[]) {
         if (animating) {
             now = now_seconds();
             if (now >= next_frame_time) {
-                if (view_step_time(view, 1) < 0) {
-                    view_set_time(view, 0);
-                }
+                view_step_time(view, 1);
                 render_frame(show_help, animating);
                 next_frame_time = now + (double)options.frame_delay_ms / 1000.0;
             }

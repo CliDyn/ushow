@@ -194,16 +194,11 @@ int view_set_depth(USView *view, size_t depth_idx) {
 
 int view_step_time(USView *view, int delta) {
     if (!view) return -1;
+    if (view->n_times <= 1) return -1;  /* No stepping with 0 or 1 timestep */
 
-    int new_idx = (int)view->time_index + delta;
-    if (new_idx < 0) {
-        new_idx = 0;
-        return -1;  /* At beginning */
-    }
-    if (new_idx >= (int)view->n_times) {
-        new_idx = view->n_times - 1;
-        return -1;  /* At end */
-    }
+    int n = (int)view->n_times;
+    int new_idx = ((int)view->time_index + delta) % n;
+    if (new_idx < 0) new_idx += n;  /* C modulo can be negative */
 
     view->time_index = new_idx;
     view->data_valid = 0;
