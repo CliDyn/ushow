@@ -3,11 +3,19 @@
 # Unstructured data visualization tool
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g -fopenmp
-# --enable-new-dtags is Linux-only, skip on macOS (Darwin)
+CFLAGS = -Wall -Wextra -O2 -g
 UNAME_S := $(shell uname -s)
-LDFLAGS = -fopenmp
-ifeq ($(UNAME_S),Darwin)
+LDFLAGS =
+
+# OpenMP: skip if compiler doesn't support it (e.g. Apple Clang)
+OMP_SUPPORTED := $(shell echo 'int main(){return 0;}' | $(CC) -fopenmp -x c - -o /dev/null 2>/dev/null && echo 1 || echo 0)
+ifeq ($(OMP_SUPPORTED),1)
+CFLAGS += -fopenmp
+LDFLAGS += -fopenmp
+endif
+
+# --enable-new-dtags is Linux-only, skip on macOS (Darwin)
+ifneq ($(UNAME_S),Darwin)
 LDFLAGS += -Wl,--enable-new-dtags
 endif
 

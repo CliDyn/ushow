@@ -6,6 +6,7 @@
 #include "../src/kdtree.h"
 #include <stdlib.h>
 #include <float.h>
+#include <math.h>
 
 /* Test creating a simple tree with one point */
 TEST(kdtree_create_single_point) {
@@ -308,6 +309,41 @@ TEST(kdtree_duplicate_points) {
     ASSERT_NEAR(nn_dist, 0.0, 1e-10);
 
     kdtree_free(tree);
+    return 1;
+}
+
+/* Test that qsort_r works correctly across platforms (BSD vs GNU signatures).
+ * Builds a large tree and verifies every point can be found as its own
+ * nearest neighbor, which requires correct sorting during tree construction. */
+TEST(kdtree_qsort_r_large_tree) {
+    size_t n = 10000;
+    double *points = malloc(n * 3 * sizeof(double));
+    ASSERT_NOT_NULL(points);
+
+    /* Scattered points — no axis-aligned patterns that might hide sort bugs */
+    for (size_t i = 0; i < n; i++) {
+        double t = (double)i / (double)n;
+        points[i * 3 + 0] = sin(t * 37.0) * cos(t * 13.0);
+        points[i * 3 + 1] = cos(t * 23.0) * sin(t * 7.0);
+        points[i * 3 + 2] = sin(t * 41.0 + 1.0);
+    }
+
+    KDTree *tree = kdtree_create(points, n);
+    ASSERT_NOT_NULL(tree);
+
+    /* Every point should be its own nearest neighbor */
+    int mismatches = 0;
+    for (size_t i = 0; i < n; i += 100) {  /* sample every 100th */
+        double query[3] = { points[i*3], points[i*3+1], points[i*3+2] };
+        size_t nn_idx;
+        double nn_dist;
+        kdtree_query_nearest(tree, query, &nn_idx, &nn_dist);
+        if (nn_idx != i || nn_dist > 1e-10) mismatches++;
+    }
+    ASSERT_EQ_INT(mismatches, 0);
+
+    kdtree_free(tree);
+    free(points);
     return 1;
 }
 

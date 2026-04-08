@@ -80,6 +80,10 @@ typedef struct {
 
 /* -------------------------------------------------------------------
  * Comparison for qsort_r (thread-safe, no global state)
+ *
+ * macOS (BSD) and Linux (GNU) have different qsort_r signatures:
+ *   GNU:  qsort_r(base, n, size, compar(a,b,arg), arg)
+ *   BSD:  qsort_r(base, n, size, arg, compar(arg,a,b))
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -87,8 +91,13 @@ typedef struct {
     int axis;
 } SortCtx;
 
+#ifdef __APPLE__
+static int compare_by_axis_r(void *arg, const void *a, const void *b) {
+    SortCtx *ctx = (SortCtx *)arg;
+#else
 static int compare_by_axis_r(const void *a, const void *b, void *arg) {
     SortCtx *ctx = (SortCtx *)arg;
+#endif
     size_t ia = *(const size_t *)a;
     size_t ib = *(const size_t *)b;
     double va = ctx->points[ia * KDTREE_DIM + ctx->axis];
@@ -155,7 +164,11 @@ static KDNode *build_tree(const double *points, size_t *indices, size_t n,
 
     /* Thread-safe sort by current axis (cf. libkdtree pmergesort) */
     SortCtx ctx = { .points = points, .axis = axis };
+#ifdef __APPLE__
+    qsort_r(indices, n, sizeof(size_t), &ctx, compare_by_axis_r);
+#else
     qsort_r(indices, n, sizeof(size_t), compare_by_axis_r, &ctx);
+#endif
 
     size_t median = n / 2;
 
