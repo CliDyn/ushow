@@ -15,7 +15,7 @@
 
 /* Dimension name patterns */
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
-static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "deptht", "depthu", "depthv", "depthw", NULL};
+static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "nz_1", "deptht", "depthu", "depthv", "depthw", NULL};
 static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d",
     "n_node", "n_face", "n_edge", "nCells", "nVertices", "nEdges", NULL};
 static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
@@ -103,9 +103,11 @@ static int matches_name_list(const char *name, const char **list) {
     return 0;
 }
 
-/* Check if dimension is likely a coordinate variable (not data) */
+/* Check if dimension is likely a coordinate variable (not data).
+ * Case-sensitive: uppercase single-letter names like T, S, U, V, Z
+ * are commonly data variables (temperature, salinity, velocity, etc.)
+ * and must not be confused with lowercase coordinate names t, z, x, y. */
 static int is_coord_dim(int ncid __attribute__((unused)), const char *dimname) {
-    /* Common coordinate dimension names */
     static const char *COORD_DIMS[] = {
         "lon", "lat", "longitude", "latitude", "x", "y",
         "time", "t", "depth", "z", "lev", "level",
@@ -113,7 +115,10 @@ static int is_coord_dim(int ncid __attribute__((unused)), const char *dimname) {
         "lonCell", "latCell", "lonVertex", "latVertex", "lonEdge", "latEdge",
         NULL
     };
-    return matches_name_list(dimname, COORD_DIMS);
+    for (int i = 0; COORD_DIMS[i] != NULL; i++) {
+        if (strcmp(dimname, COORD_DIMS[i]) == 0) return 1;
+    }
+    return 0;
 }
 
 /*
