@@ -193,6 +193,7 @@ COMMON_SRCS = $(SRCDIR)/common.c \
               $(SRCDIR)/view.c
 
 USHOW_SRCS = $(SRCDIR)/ushow.c \
+             $(SRCDIR)/window_title.c \
              $(COMMON_SRCS) \
              $(SRCDIR)/interface/x_interface.c \
              $(SRCDIR)/interface/colorbar.c \

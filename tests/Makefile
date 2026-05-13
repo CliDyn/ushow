@@ -87,7 +87,7 @@ endif
 SRCDIR = ../src
 
 # Test executables
-TEST_TARGETS = test_kdtree test_mesh test_regrid test_projection test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband test_regional_range
+TEST_TARGETS = test_kdtree test_mesh test_regrid test_projection test_colormaps test_file_netcdf test_file_mitgcm test_integration test_term_render_mode test_range_popup test_timeseries test_latband test_regional_range test_window_title
 
 # Add zarr test if enabled
 ifdef WITH_ZARR
@@ -160,6 +160,11 @@ test_term_render_mode: test_term_render_mode.c $(SRCDIR)/term_render_mode.c
 RANGE_UTILS_OBJ = $(SRCDIR)/interface/range_utils.c
 
 test_range_popup: test_range_popup.c $(RANGE_UTILS_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+
+WINDOW_TITLE_OBJ = $(SRCDIR)/window_title.c
+
+test_window_title: test_window_title.c $(WINDOW_TITLE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 test_timeseries: test_timeseries.c $(FILE_NETCDF_OBJ) $(MESH_DEPS) $(KDTREE_OBJ)
@@ -261,6 +266,9 @@ test-term-render-mode: test_term_render_mode
 
 test-range-popup: test_range_popup
 	./test_range_popup
+
+test-window-title: test_window_title
+	./test_window_title
 
 test-timeseries: test_timeseries
 	./test_timeseries

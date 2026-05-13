@@ -22,6 +22,7 @@
 #include "common.h"
 #include "colormaps.h"
 #include "view.h"
+#include "window_title.h"
 #include "interface/x_interface.h"
 
 #include <stdio.h>
@@ -950,6 +951,8 @@ int main(int argc, char *argv[]) {
 
     int n_data_files = argc - first_data_arg;
     const char **data_filenames = (const char **)&argv[first_data_arg];
+    /* Snapshot first filename — argv may be mutated later by XtVaAppInitialize(). */
+    const char *first_data_filename = data_filenames[0];
     const char *mesh_filename = options.mesh_file[0] ? options.mesh_file : NULL;
 
     /* Apply thread settings: CLI > OMP_NUM_THREADS > default 4 */
@@ -1434,26 +1437,22 @@ int main(int argc, char *argv[]) {
     x_set_mouse_click_callback(on_mouse_click);
     x_set_mouse_right_click_callback(on_mouse_right_click);
 
-    /* Set window title from data source */
+    /* Set window title from data source.
+     * Note: x_init() calls XtVaAppInitialize() which may mutate argv (e.g. it
+     * prefix-matches "-i" as the Xt "-iconic" option and shifts later entries
+     * down). data_filenames points into argv, so its slots are no longer
+     * trustworthy here — use the snapshot taken before x_init(). */
     {
-        const char *display_name = data_filenames[0];
-        const char *slash = strrchr(display_name, '/');
-        if (slash) display_name = slash + 1;
-
         int total_files = n_data_files;
         if (fileset) total_files = fileset->n_files;
 #ifdef HAVE_ZARR
         if (zarr_fileset) total_files = zarr_fileset->n_files;
 #endif
 
-        if (total_files > 1) {
-            char title_buf[512];
-            snprintf(title_buf, sizeof(title_buf), "%s (%d files)",
-                     display_name, total_files);
-            x_update_title(title_buf);
-        } else {
-            x_update_title(display_name);
-        }
+        char title_buf[512];
+        format_window_title(first_data_filename, total_files,
+                            title_buf, sizeof(title_buf));
+        x_update_title(title_buf);
     }
 
     /* Create view */
