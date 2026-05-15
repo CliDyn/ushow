@@ -15,7 +15,9 @@
 
 /* Dimension name patterns */
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
-static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", "nz_1", "deptht", "depthu", "depthv", "depthw", NULL};
+static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1",
+                                    "nz_1", "deptht", "depthu", "depthv", "depthw",
+                                    "plev", "pressure_level", NULL};
 static const char *NODE_NAMES[] = {"nod2", "nod2d", "node", "nodes", "ncells", "npoints", "nod", "n2d",
     "n_node", "n_face", "n_edge", "nCells", "nVertices", "nEdges", NULL};
 static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};

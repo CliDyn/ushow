@@ -285,6 +285,47 @@ TEST(netcdf_get_dim_info_basic) {
     return 1;
 }
 
+/* Test that "plev" is recognized as a vertical dim (CMIP convention).
+ * Regression: before plev was added to DEPTH_NAMES, scan_variables would
+ * miscount plev as a spatial dim and either fail or produce wrong shape. */
+TEST(netcdf_3d_variable_plev) {
+    const char *filename = create_test_netcdf_3d_named(2, 7, 100, "plev");
+    ASSERT_NOT_NULL(filename);
+
+    USFile *file = netcdf_open(filename);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_netcdf(file->ncid, NULL);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = netcdf_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *temp = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "temp") == 0) { temp = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(temp);
+
+    /* plev must be detected as depth, not as a spatial dim */
+    ASSERT_TRUE(temp->time_dim_id >= 0);
+    ASSERT_TRUE(temp->depth_dim_id >= 0);
+
+    /* Reading a slice at a non-zero plev index must succeed */
+    float *data = malloc(mesh->n_points * sizeof(float));
+    ASSERT_NOT_NULL(data);
+    int status = netcdf_read_slice(temp, 0, 3, data);
+    ASSERT_EQ(status, 0);
+    free(data);
+
+    mesh_free(mesh);
+    netcdf_close(file);
+    cleanup_test_file(filename);
+    return 1;
+}
+
 /* Test with 3D data (time, depth, nodes) */
 TEST(netcdf_3d_variable) {
     const char *filename = create_test_netcdf_3d(3, 5, 100);

@@ -1990,6 +1990,226 @@ TEST(structured_multichunk_read) {
     return 1;
 }
 
+/*
+ * Create a 4-D zarr store (time, plev, lat, lon) mimicking the CMIP/AIMIP
+ * upper-air layout used by AWI-CAST. The vertical dim name is configurable
+ * so we can also test "pressure_level" or the legacy "lev".
+ */
+static const char *create_plev_zarr_store(int nx, int ny, int n_plev, int n_times,
+                                          const char *plev_name) {
+    static char store_path[256];
+    snprintf(store_path, sizeof(store_path), "/tmp/test_ushow_zarr_plev_%d_%d.zarr",
+             getpid(), zarr_test_counter++);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", store_path);
+    int ret = system(cmd);
+    (void)ret;
+
+    if (mkdir(store_path, 0755) != 0) return NULL;
+    if (write_zarr_file(store_path, ".zgroup", "{\"zarr_format\":2}") != 0) return NULL;
+    if (write_zarr_file(store_path, ".zattrs", "{}") != 0) return NULL;
+
+    char array_dir[512], zarray[1024], zattrs[256];
+
+    /* lat[ny] */
+    snprintf(array_dir, sizeof(array_dir), "%s/lat", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", ny, ny);
+    if (write_zarr_file(store_path, "lat/.zarray", zarray) != 0) return NULL;
+    if (write_zarr_file(store_path, "lat/.zattrs",
+                        "{\"units\":\"degrees_north\",\"_ARRAY_DIMENSIONS\":[\"lat\"]}") != 0) return NULL;
+    double *lat_data = malloc(ny * sizeof(double));
+    if (!lat_data) return NULL;
+    for (int j = 0; j < ny; j++) lat_data[j] = -90.0 + 180.0 * j / (ny - 1);
+    if (write_zarr_chunk(store_path, "lat", "0", lat_data, ny * sizeof(double)) != 0) {
+        free(lat_data); return NULL;
+    }
+    free(lat_data);
+
+    /* lon[nx] */
+    snprintf(array_dir, sizeof(array_dir), "%s/lon", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", nx, nx);
+    if (write_zarr_file(store_path, "lon/.zarray", zarray) != 0) return NULL;
+    if (write_zarr_file(store_path, "lon/.zattrs",
+                        "{\"units\":\"degrees_east\",\"_ARRAY_DIMENSIONS\":[\"lon\"]}") != 0) return NULL;
+    double *lon_data = malloc(nx * sizeof(double));
+    if (!lon_data) return NULL;
+    for (int i = 0; i < nx; i++) lon_data[i] = -180.0 + 360.0 * i / (nx - 1);
+    if (write_zarr_chunk(store_path, "lon", "0", lon_data, nx * sizeof(double)) != 0) {
+        free(lon_data); return NULL;
+    }
+    free(lon_data);
+
+    /* time[nt] */
+    snprintf(array_dir, sizeof(array_dir), "%s/time", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", n_times, n_times);
+    if (write_zarr_file(store_path, "time/.zarray", zarray) != 0) return NULL;
+    if (write_zarr_file(store_path, "time/.zattrs",
+                        "{\"units\":\"days since 2000-01-01\"}") != 0) return NULL;
+    double *time_data = malloc(n_times * sizeof(double));
+    if (!time_data) return NULL;
+    for (int t = 0; t < n_times; t++) time_data[t] = t;
+    if (write_zarr_chunk(store_path, "time", "0", time_data, n_times * sizeof(double)) != 0) {
+        free(time_data); return NULL;
+    }
+    free(time_data);
+
+    /* plev[n_plev] (dim name parameterized) */
+    char plev_dir[256];
+    snprintf(plev_dir, sizeof(plev_dir), "%s/%s", store_path, plev_name);
+    if (mkdir(plev_dir, 0755) != 0) return NULL;
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[%d],\"compressor\":null,\"dtype\":\"<f8\","
+             "\"fill_value\":\"NaN\",\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d],\"zarr_format\":2}", n_plev, n_plev);
+    char plev_zarray_path[256], plev_zattrs_path[256];
+    snprintf(plev_zarray_path, sizeof(plev_zarray_path), "%s/.zarray", plev_name);
+    snprintf(plev_zattrs_path, sizeof(plev_zattrs_path), "%s/.zattrs", plev_name);
+    if (write_zarr_file(store_path, plev_zarray_path, zarray) != 0) return NULL;
+    snprintf(zattrs, sizeof(zattrs),
+             "{\"units\":\"Pa\",\"_ARRAY_DIMENSIONS\":[\"%s\"]}", plev_name);
+    if (write_zarr_file(store_path, plev_zattrs_path, zattrs) != 0) return NULL;
+    double *plev_data = malloc(n_plev * sizeof(double));
+    if (!plev_data) return NULL;
+    /* Standard CMIP plev values: 1000, 850, 700, ... hPa in Pa */
+    double standard_plevs[7] = {100000, 85000, 70000, 50000, 25000, 10000, 5000};
+    for (int k = 0; k < n_plev; k++) {
+        plev_data[k] = (k < 7) ? standard_plevs[k] : (5000.0 - k * 100);
+    }
+    if (write_zarr_chunk(store_path, plev_name, "0", plev_data, n_plev * sizeof(double)) != 0) {
+        free(plev_data); return NULL;
+    }
+    free(plev_data);
+
+    /* ta(time, plev, lat, lon) — chunk per time/level */
+    snprintf(array_dir, sizeof(array_dir), "%s/ta", store_path);
+    if (mkdir(array_dir, 0755) != 0) return NULL;
+    snprintf(zarray, sizeof(zarray),
+             "{\"chunks\":[1,1,%d,%d],\"compressor\":null,\"dtype\":\"<f4\","
+             "\"fill_value\":1e20,\"filters\":null,\"order\":\"C\","
+             "\"shape\":[%d,%d,%d,%d],\"zarr_format\":2}",
+             ny, nx, n_times, n_plev, ny, nx);
+    if (write_zarr_file(store_path, "ta/.zarray", zarray) != 0) return NULL;
+    snprintf(zattrs, sizeof(zattrs),
+             "{\"units\":\"K\",\"long_name\":\"Air Temperature\","
+             "\"_ARRAY_DIMENSIONS\":[\"time\",\"%s\",\"lat\",\"lon\"]}", plev_name);
+    if (write_zarr_file(store_path, "ta/.zattrs", zattrs) != 0) return NULL;
+
+    int n_points = ny * nx;
+    float *data = malloc(n_points * sizeof(float));
+    if (!data) return NULL;
+    for (int t = 0; t < n_times; t++) {
+        for (int k = 0; k < n_plev; k++) {
+            for (int j = 0; j < ny; j++) {
+                for (int i = 0; i < nx; i++) {
+                    /* Temperature drops with level index; encodes (t,k) for verification */
+                    data[j * nx + i] = 273.0f + (float)t * 10.0f - (float)k * 5.0f;
+                }
+            }
+            char chunk_name[64];
+            snprintf(chunk_name, sizeof(chunk_name), "%d.%d.0.0", t, k);
+            if (write_zarr_chunk(store_path, "ta", chunk_name, data, n_points * sizeof(float)) != 0) {
+                free(data); return NULL;
+            }
+        }
+    }
+    free(data);
+
+    return store_path;
+}
+
+/* Regression test: "plev" (CMIP/AIMIP convention) must be recognized as the
+ * vertical dim. Before plev was added to DEPTH_NAMES the variable failed with
+ * "Unsupported number of spatial dimensions: 3". */
+TEST(zarr_plev_recognized_as_depth) {
+    const int nx = 12, ny = 9, n_plev = 7, nt = 2;
+    const char *store_path = create_plev_zarr_store(nx, ny, n_plev, nt, "plev");
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+    ASSERT_EQ_SIZET(mesh->n_points, (size_t)(ny * nx));
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *ta = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "ta") == 0) { ta = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(ta);
+
+    /* plev is the depth dim, not a third spatial dim */
+    ASSERT_TRUE(ta->time_dim_id >= 0);
+    ASSERT_TRUE(ta->depth_dim_id >= 0);
+
+    /* Read level 3 at time 1: expect 273 + 1*10 - 3*5 = 268 */
+    float *data = malloc((size_t)nx * ny * sizeof(float));
+    ASSERT_NOT_NULL(data);
+    int status = zarr_read_slice(ta, 1, 3, data);
+    ASSERT_EQ(status, 0);
+    ASSERT_NEAR(data[0], 268.0f, 0.01f);
+    ASSERT_NEAR(data[ny * nx - 1], 268.0f, 0.01f);
+
+    /* And level 0 at time 0: 273 */
+    status = zarr_read_slice(ta, 0, 0, data);
+    ASSERT_EQ(status, 0);
+    ASSERT_NEAR(data[0], 273.0f, 0.01f);
+
+    free(data);
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
+/* Same test but with the "pressure_level" alias also added to DEPTH_NAMES. */
+TEST(zarr_pressure_level_recognized_as_depth) {
+    const int nx = 8, ny = 6, n_plev = 4, nt = 1;
+    const char *store_path = create_plev_zarr_store(nx, ny, n_plev, nt, "pressure_level");
+    ASSERT_NOT_NULL(store_path);
+
+    USFile *file = zarr_open(store_path);
+    ASSERT_NOT_NULL(file);
+
+    USMesh *mesh = mesh_create_from_zarr(file);
+    ASSERT_NOT_NULL(mesh);
+
+    USVar *vars = zarr_scan_variables(file, mesh);
+    ASSERT_NOT_NULL(vars);
+
+    USVar *ta = NULL;
+    USVar *v = vars;
+    while (v) {
+        if (strcmp(v->name, "ta") == 0) { ta = v; break; }
+        v = v->next;
+    }
+    ASSERT_NOT_NULL(ta);
+    ASSERT_TRUE(ta->depth_dim_id >= 0);
+
+    mesh_free(mesh);
+    zarr_close(file);
+    cleanup_test_zarr(store_path);
+    return 1;
+}
+
 RUN_TESTS("File Zarr")
 
 #else /* !HAVE_ZARR */

@@ -27,7 +27,8 @@
 
 /* Dimension name patterns (same as file_netcdf.c) */
 static const char *TIME_NAMES[] = {"time", "t", "Time", "TIME", NULL};
-static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1", NULL};
+static const char *DEPTH_NAMES[] = {"depth", "z", "lev", "level", "nz", "nz1",
+                                    "plev", "pressure_level", NULL};
 static const char *NODE_NAMES[] = {"values", "nod2", "nod2d", "node", "nodes", "ncells", "npoints", NULL};
 static const char *LAT_NAMES[] = {"lat", "latitude", "y", "nlat", "rlat", "j", NULL};
 static const char *LON_NAMES[] = {"lon", "longitude", "x", "nlon", "rlon", "i", NULL};

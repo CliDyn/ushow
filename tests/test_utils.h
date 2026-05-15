@@ -287,9 +287,12 @@ static const char *create_test_netcdf_unstructured(int n_nodes) {
 }
 
 /*
- * Create a NetCDF file with 3D data (time, depth, nodes).
+ * Create a NetCDF file with 3D data (time, <vertical>, nodes).
+ * The vertical dimension is named according to `depth_name` (e.g. "depth",
+ * "plev", "lev") so tests can exercise different DEPTH_NAMES patterns.
  */
-static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
+static const char *create_test_netcdf_3d_named(int nt, int nz, int n_nodes,
+                                               const char *depth_name) {
     static char filename[256];
     snprintf(filename, sizeof(filename), "/tmp/test_ushow_3d_%d_%d.nc", getpid(), test_file_counter++);
     unlink(filename);
@@ -306,7 +309,7 @@ static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
     /* Define dimensions */
     status = nc_def_dim(ncid, "time", nt, &time_dimid);
     NC_CHECK(status);
-    status = nc_def_dim(ncid, "depth", nz, &depth_dimid);
+    status = nc_def_dim(ncid, depth_name, nz, &depth_dimid);
     NC_CHECK(status);
     status = nc_def_dim(ncid, "nod2", n_nodes, &node_dimid);
     NC_CHECK(status);
@@ -318,7 +321,7 @@ static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
     NC_CHECK(status);
     status = nc_def_var(ncid, "time", NC_DOUBLE, 1, &time_dimid, &time_varid);
     NC_CHECK(status);
-    status = nc_def_var(ncid, "depth", NC_DOUBLE, 1, &depth_dimid, &depth_varid);
+    status = nc_def_var(ncid, depth_name, NC_DOUBLE, 1, &depth_dimid, &depth_varid);
     NC_CHECK(status);
 
     /* 3D data variable */
@@ -379,6 +382,11 @@ static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
 
     nc_close(ncid);
     return filename;
+}
+
+/* Backward-compatible wrapper: 3D file with vertical dim named "depth". */
+static const char *create_test_netcdf_3d(int nt, int nz, int n_nodes) {
+    return create_test_netcdf_3d_named(nt, nz, n_nodes, "depth");
 }
 
 /*
