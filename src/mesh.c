@@ -167,6 +167,114 @@ static int find_coord_var(int ncid, const char **names, CoordInfo *info) {
     return -1;
 }
 
+/* FESOM2 mesh.diag.nc (and some other unstructured meshes) store the node
+ * coordinates in a single variable holding both lon and lat, e.g.
+ *   double nodes(n2, nod_n) ;   // nodes[0,:] = lon, nodes[1,:] = lat
+ * typically in RADIANS and WITHOUT a units attribute, so the name-based
+ * lon/lat search misses them entirely. This is the fallback for that layout.
+ * Returns a fully built USMesh, or NULL if no such variable is present. */
+static USMesh *mesh_create_from_combined_nodes(int ncid, const char *mesh_filename) {
+    static const char *COMBINED_NAMES[] = {
+        "nodes", "coord_nod2D", "coord_nod2d", "node_coords", NULL
+    };
+
+    int varid = -1;
+    const char *matched_name = NULL;
+    for (int i = 0; COMBINED_NAMES[i] != NULL; i++) {
+        if (nc_inq_varid(ncid, COMBINED_NAMES[i], &varid) == NC_NOERR) {
+            matched_name = COMBINED_NAMES[i];
+            break;
+        }
+        varid = -1;
+    }
+    if (varid < 0) return NULL;
+
+    int ndims = 0;
+    nc_inq_varndims(ncid, varid, &ndims);
+    if (ndims != 2) return NULL;
+
+    int dimids[2];
+    size_t d[2];
+    nc_inq_vardimid(ncid, varid, dimids);
+    nc_inq_dimlen(ncid, dimids[0], &d[0]);
+    nc_inq_dimlen(ncid, dimids[1], &d[1]);
+
+    /* One axis must be the 2-component (lon,lat) axis. */
+    size_t n_points;
+    int comp_first;                 /* 1: shape (2, n); 0: shape (n, 2) */
+    if (d[0] == 2)      { comp_first = 1; n_points = d[1]; }
+    else if (d[1] == 2) { comp_first = 0; n_points = d[0]; }
+    else return NULL;
+    if (n_points == 0) return NULL;
+
+    double *raw = malloc((size_t)2 * n_points * sizeof(double));
+    double *lon = malloc(n_points * sizeof(double));
+    double *lat = malloc(n_points * sizeof(double));
+    if (!raw || !lon || !lat) { free(raw); free(lon); free(lat); return NULL; }
+
+    if (nc_get_var_double(ncid, varid, raw) != NC_NOERR) {
+        free(raw); free(lon); free(lat);
+        return NULL;
+    }
+
+    if (comp_first) {
+        /* (2, n) C-order: first n values are lon, next n are lat */
+        for (size_t i = 0; i < n_points; i++) {
+            lon[i] = raw[i];
+            lat[i] = raw[n_points + i];
+        }
+    } else {
+        /* (n, 2) C-order: lon,lat interleaved per node */
+        for (size_t i = 0; i < n_points; i++) {
+            lon[i] = raw[2 * i];
+            lat[i] = raw[2 * i + 1];
+        }
+    }
+    free(raw);
+
+    /* Convert radians -> degrees. Honor an explicit units attribute; otherwise
+     * autodetect by range (radian lat <= ~pi/2, degree lat up to 90). */
+    char units[32];
+    read_units_attribute(ncid, varid, units, sizeof(units));
+    int radians;
+    if (is_radian_units(units)) {
+        radians = 1;
+    } else {
+        double max_abs_lon = 0.0, max_abs_lat = 0.0;
+        for (size_t i = 0; i < n_points; i++) {
+            double ao = fabs(lon[i]), al = fabs(lat[i]);
+            if (ao > max_abs_lon) max_abs_lon = ao;
+            if (al > max_abs_lat) max_abs_lat = al;
+        }
+        radians = (max_abs_lat <= M_PI / 2.0 + 1e-6) &&
+                  (max_abs_lon <= 2.0 * M_PI + 1e-6);
+    }
+    if (radians) {
+        for (size_t i = 0; i < n_points; i++) {
+            lon[i] *= RAD2DEG;
+            lat[i] *= RAD2DEG;
+        }
+    }
+
+    /* Normalize longitude to [-180, 180] */
+    for (size_t i = 0; i < n_points; i++) {
+        while (lon[i] > 180.0)  lon[i] -= 360.0;
+        while (lon[i] < -180.0) lon[i] += 360.0;
+    }
+
+    printf("Detected: combined node coordinates '%s' (%zu points, %s)\n",
+           matched_name, n_points, radians ? "radians->degrees" : "degrees");
+
+    USMesh *mesh = mesh_create(lon, lat, n_points, COORD_TYPE_1D_UNSTRUCTURED);
+    if (!mesh) { free(lon); free(lat); return NULL; }
+
+    if (mesh_filename && mesh_filename[0]) {
+        mesh->mesh_filename = strdup(mesh_filename);
+        mesh->mesh_loaded = 1;
+    }
+    return mesh;
+}
+
 USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
     int mesh_ncid;
     int status;
@@ -186,6 +294,14 @@ USMesh *mesh_create_from_netcdf(int data_ncid, const char *mesh_filename) {
 
     /* Find longitude variable */
     if (find_coord_var(mesh_ncid, LON_NAMES, &lon_info) != 0) {
+        /* Fallback: meshes that store lon+lat in a single combined variable
+         * (e.g. FESOM2 mesh.diag.nc "nodes"(n2, nod_n)) are not matched by the
+         * name-based search above. */
+        USMesh *combined = mesh_create_from_combined_nodes(mesh_ncid, mesh_filename);
+        if (combined) {
+            if (mesh_filename && mesh_filename[0]) nc_close(mesh_ncid);
+            return combined;
+        }
         fprintf(stderr, "Could not find longitude coordinate variable\n");
         if (mesh_filename && mesh_filename[0]) nc_close(mesh_ncid);
         return NULL;

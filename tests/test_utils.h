@@ -665,6 +665,65 @@ static const char *create_test_netcdf_mpas_with_connectivity(
 }
 
 /*
+ * Create a test NetCDF file mimicking the classic FESOM2 fesom.mesh.diag.nc
+ * layout: node coordinates stored in a single combined variable
+ * nodes(n2, nod_n) in RADIANS with no units attribute
+ * (nodes[0,:] = lon, nodes[1,:] = lat). Node 0 is pinned to a known location
+ * (lon = pi/2, lat = pi/4) so the radians->degrees conversion can be checked
+ * deterministically; the rest are pseudo-random within the radian range.
+ */
+static const char *create_test_netcdf_fesom_combined_nodes(int n_nodes) {
+    static char filename[256];
+    snprintf(filename, sizeof(filename),
+             P_tmpdir "/test_ushow_fesom_nodes_%d_%d.nc",
+             getpid(), test_file_counter++);
+    unlink(filename);
+
+    int ncid, n2_dimid, nod_dimid, nodes_varid;
+    int dimids[2];
+    int status;
+
+    status = nc_create(filename, NC_NETCDF4, &ncid);
+    NC_CHECK(status);
+
+    status = nc_def_dim(ncid, "n2", 2, &n2_dimid);
+    NC_CHECK(status);
+    status = nc_def_dim(ncid, "nod_n", n_nodes, &nod_dimid);
+    NC_CHECK(status);
+
+    /* nodes(n2, nod_n): combined lon/lat, no units attribute (radians) */
+    dimids[0] = n2_dimid;
+    dimids[1] = nod_dimid;
+    status = nc_def_var(ncid, "nodes", NC_DOUBLE, 2, dimids, &nodes_varid);
+    NC_CHECK(status);
+    status = nc_put_att_text(ncid, nodes_varid, "long_name", 22,
+                             "nodal geo. coordinates");
+    NC_CHECK(status);
+
+    status = nc_enddef(ncid);
+    NC_CHECK(status);
+
+    /* Component-major (2, n): first n values = lon, next n = lat, in RADIANS */
+    double *raw = malloc((size_t)2 * n_nodes * sizeof(double));
+    if (!raw) { nc_close(ncid); return NULL; }
+    for (int i = 0; i < n_nodes; i++) {
+        unsigned int seed = (unsigned int)i * 1103515245U + 12345U;
+        raw[i] = -3.14159265 + 6.28318530 * (double)(seed % 10000) / 10000.0;
+        seed = seed * 1103515245U + 12345U;
+        raw[n_nodes + i] = -1.57079632 + 3.14159265 * (double)(seed % 10000) / 10000.0;
+    }
+    /* Pin node 0 to a known location so the test can check exact conversion. */
+    raw[0] = 1.57079632679;            /* lon = pi/2  -> 90 degrees */
+    raw[n_nodes + 0] = 0.78539816340;  /* lat = pi/4  -> 45 degrees */
+
+    nc_put_var_double(ncid, nodes_varid, raw);
+    free(raw);
+
+    nc_close(ncid);
+    return filename;
+}
+
+/*
  * Remove a test file.
  */
 static void cleanup_test_file(const char *filename) {
