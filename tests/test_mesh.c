@@ -538,4 +538,44 @@ TEST(mesh_from_netcdf_ncid_not_corrupted) {
     return 1;
 }
 
+/* Test mesh_create_from_netcdf with a FESOM2-style combined nodes(n2, nod_n)
+ * coordinate variable in radians (no units attribute). Regression for the
+ * "Could not find longitude coordinate variable" failure on fesom.mesh.diag.nc. */
+TEST(mesh_from_netcdf_fesom_combined_nodes) {
+    const int N = 64;
+    const char *filename = create_test_netcdf_fesom_combined_nodes(N);
+    ASSERT_NOT_NULL(filename);
+
+    /* Loaded as a separate mesh file (data_ncid unused) */
+    USMesh *mesh = mesh_create_from_netcdf(0, filename);
+    ASSERT_NOT_NULL(mesh);
+
+    ASSERT_EQ_SIZET(mesh->n_points, (size_t)N);
+    ASSERT_EQ(mesh->coord_type, COORD_TYPE_1D_UNSTRUCTURED);
+
+    /* Node 0 was pinned to lon=pi/2, lat=pi/4 radians -> must become 90, 45 deg */
+    ASSERT_NEAR(mesh->lon[0], 90.0, EPSILON_LOOSE);
+    ASSERT_NEAR(mesh->lat[0], 45.0, EPSILON_LOOSE);
+
+    /* All coordinates must be in degree range (radians->degrees applied) */
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        ASSERT_GE(mesh->lon[i], -180.0);
+        ASSERT_LE(mesh->lon[i], 180.0);
+        ASSERT_GE(mesh->lat[i], -90.5);
+        ASSERT_LE(mesh->lat[i], 90.5);
+    }
+
+    /* XYZ should be on the unit sphere */
+    for (size_t i = 0; i < mesh->n_points; i++) {
+        double x = mesh->xyz[i * 3 + 0];
+        double y = mesh->xyz[i * 3 + 1];
+        double z = mesh->xyz[i * 3 + 2];
+        ASSERT_NEAR(sqrt(x*x + y*y + z*z), 1.0, EPSILON);
+    }
+
+    mesh_free(mesh);
+    cleanup_test_file(filename);
+    return 1;
+}
+
 RUN_TESTS("Mesh")
